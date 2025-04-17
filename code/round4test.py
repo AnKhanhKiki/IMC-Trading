@@ -149,7 +149,7 @@ class Trader:
             "PICNIC_BASKET2": {"prices": [], "arb_opportunities": []},
             # Add new products to history
             "VOLCANIC_ROCK": {"prices": []},
-            "MAGNIFICENT_MACARONS": {"prices": []} # Add MACARONS history
+            "MAGNIFICENT_MACARONS": {"prices": [], "sunlight_index": [], "sugar_price": []} # Add MACARONS history
         }
         for strike in voucher_strikes:
             symbol = f"VOLCANIC_ROCK_VOUCHER_{strike}"
@@ -176,7 +176,7 @@ class Trader:
 
             return 0.5 * (1.0 + sign * y)
 
-    def _calculate_vwap(self, order_depth):
+    def _calculate_vwap(self, order_depth: OrderDepth):
         total_volume = 0
         value_sum = 0
         for price, vol in order_depth.buy_orders.items():
@@ -197,7 +197,7 @@ class Trader:
         self.history[product]["ema"] = ema
         return ema
 
-    def _resin_strategy(self, order_depth, position, mid):
+    def _resin_strategy(self, order_depth: OrderDepth, position: int, mid: int):
         cfg = self.strategy_config["RAINFOREST_RESIN"]
         orders = []
         best_bid = max(order_depth.buy_orders.keys(), default=mid)
@@ -439,37 +439,65 @@ class Trader:
         conversion_amount = 0
         product = "MAGNIFICENT_MACARONS"
         position = state.position.get(product, 0)
-        # Calculate effective prices
+
+        # Calculate effective prices based on tariffs and fees
         effective_sell_price = conversion_data.bidPrice - conversion_data.transportFees - conversion_data.exportTariff
         effective_buy_price = conversion_data.askPrice + conversion_data.transportFees + conversion_data.importTariff
         order_depth = state.order_depths.get(product, OrderDepth())
         best_bid = max(order_depth.buy_orders.keys(), default=0)
         best_ask = min(order_depth.sell_orders.keys(), default=float('inf'))
+        
+        # Define reference values for sunlight and sugar price
+        sunlight_reference = 45  # Midpoint of expected range (70 + 20) / 2
+        sugar_reference = 202.5  # Midpoint of expected range (220 + 185) / 2
+        
+        # Calculate factors with stronger coefficients to reflect their impact
+        sunlight_factor = (conversion_data.sunlightIndex - sunlight_reference) / sunlight_reference
+        sugar_factor = (conversion_data.sugarPrice - sugar_reference) / sugar_reference
+        
+        # Strengthen the adjustment factors based on observed correlation
+        # Negative correlation with sunlight (stronger), positive with sugar (stronger)
+        price_adjustment = (-0.12 * sunlight_factor + 0.15 * sugar_factor)
+        
+        # Apply adjustment to effective prices
+        adjusted_sell_price = effective_sell_price * (1 + price_adjustment)
+        adjusted_buy_price = effective_buy_price * (1 + price_adjustment)
+        
+        # Log values for debugging
+        print(f"Sugar: {conversion_data.sugarPrice}, Sunlight: {conversion_data.sunlightIndex}")
+        print(f"Price adjustment: {price_adjustment:.4f}")
+        print(f"Effective sell: {effective_sell_price:.2f} → Adjusted: {adjusted_sell_price:.2f}")
+        print(f"Effective buy: {effective_buy_price:.2f} → Adjusted: {adjusted_buy_price:.2f}")
 
-        # Sell logic
-        if best_bid > 0 and best_bid > effective_sell_price:
+        # Position management based on market outlook
+        # Be more aggressive buying when sugar high/sunlight low and selling when sugar low/sunlight high
+        position_limit = 75
+        position_target = position_limit * price_adjustment
+        position_bias = int(position_target)  # Positive means favor buying, negative means favor selling
+        
+        # Sell logic - more aggressive when negative outlook (high sunlight, low sugar)
+        if best_bid > 0 and best_bid > adjusted_sell_price:
             # Sell in market
             available_quantity = order_depth.buy_orders.get(best_bid, 0)
-            max_sell_market = min(available_quantity, 75 + position)
+            max_sell_market = min(available_quantity, position_limit + position - position_bias)
             if max_sell_market > 0:
                 orders.append(Order(product, best_bid, -max_sell_market))
-        elif effective_sell_price > best_bid: # Sell via conversion if profitable compared to market
-            max_sell_conversion = min(10, position + 75)
+        elif adjusted_sell_price > best_bid:  # Sell via conversion if profitable compared to market
+            max_sell_conversion = min(10, position + position_limit - position_bias)
             if max_sell_conversion > 0:
                 conversion_amount -= max_sell_conversion
 
-        # Buy logic
-        if best_ask < float('inf') and best_ask < effective_buy_price:
+        # Buy logic - more aggressive when positive outlook (low sunlight, high sugar)
+        if best_ask < float('inf') and best_ask < adjusted_buy_price:
             # Buy from market
             available_quantity = abs(order_depth.sell_orders.get(best_ask, 0))
-            max_buy_market = min(available_quantity, 75 - position)
+            max_buy_market = min(available_quantity, position_limit - position + position_bias)
             if max_buy_market > 0:
                 orders.append(Order(product, best_ask, max_buy_market))
-        elif effective_buy_price < best_ask: # Buy via conversion if profitable compared to market
-            # Introduce a small profit margin for buying via conversion to account for storage
-            profit_margin = 0.2 # Example margin
-            if best_ask - effective_buy_price > profit_margin:
-                max_buy_conversion = min(10, 75 - position)
+        elif adjusted_buy_price < best_ask:  # Buy via conversion if profitable compared to market
+            profit_margin = 0.1  # Reduced margin requirement when we have strong signals
+            if best_ask - adjusted_buy_price > profit_margin:
+                max_buy_conversion = min(10, position_limit - position + position_bias)
                 if max_buy_conversion > 0:
                     conversion_amount += max_buy_conversion
 
@@ -483,66 +511,66 @@ class Trader:
         result = {product: [] for product in self.strategy_config}
         conversion_requests = 0 # Initialize conversion requests
 
-        # Existing strategy processing
-        for product in state.order_depths:
-            if product not in self.strategy_config:
-                continue
-            od = state.order_depths[product]
-            position = state.position.get(product, 0)
-            best_bid = max(od.buy_orders.keys(), default=0)
-            best_ask = min(od.sell_orders.keys(), default=0)
-            mid = (best_bid + best_ask) / 2 if best_bid and best_ask else 0
-            self.history[product]["prices"].append(mid)
-            if product in ["CROISSANTS", "JAMS", "DJEMBES"]:
-                self.history[product]["best_bid"].append(best_bid)
-                self.history[product]["best_ask"].append(best_ask)
-            elif product == "RAINFOREST_RESIN":
-                orders = self._resin_strategy(od, position, mid)
-                result[product] = orders
-            elif product == "KELP":
-                orders = self._kelp_strategy(position, mid, best_bid, best_ask)
-                result[product] = orders
-            elif product == "SQUID_INK":
-                orders = self._squid_strategy(od, position, mid, best_bid, best_ask)
-                result[product] = orders
+        # # Existing strategy processing
+        # for product in state.order_depths:
+        #     if product not in self.strategy_config:
+        #         continue
+        #     od = state.order_depths[product]
+        #     position = state.position.get(product, 0)
+        #     best_bid = max(od.buy_orders.keys(), default=0)
+        #     best_ask = min(od.sell_orders.keys(), default=0)
+        #     mid = (best_bid + best_ask) / 2 if best_bid and best_ask else 0
+        #     self.history[product]["prices"].append(mid)
+        #     if product in ["CROISSANTS", "JAMS", "DJEMBES"]:
+        #         self.history[product]["best_bid"].append(best_bid)
+        #         self.history[product]["best_ask"].append(best_ask)
+        #     elif product == "RAINFOREST_RESIN":
+        #         orders = self._resin_strategy(od, position, mid)
+        #         result[product] = orders
+        #     elif product == "KELP":
+        #         orders = self._kelp_strategy(position, mid, best_bid, best_ask)
+        #         result[product] = orders
+        #     elif product == "SQUID_INK":
+        #         orders = self._squid_strategy(od, position, mid, best_bid, best_ask)
+        #         result[product] = orders
 
-        basket_orders = {}
-        for product in ["PICNIC_BASKET1", "PICNIC_BASKET2"]:
-            if product in state.order_depths:
-                # Position closing logic
-                position = state.position.get(product, 0)
-                limit = self.strategy_config[product]["position_limit"]
-                if abs(position) > limit * 0.8:
-                    od = state.order_depths[product]
-                    if position > 0 and od.buy_orders:
-                        best_bid = max(od.buy_orders.keys())
-                        result[product].append(Order(product, best_bid, -position))
-                    elif position < 0 and od.sell_orders:
-                        best_ask = min(od.sell_orders.keys())
-                        result[product].append(Order(product, best_ask, -position))
+        # basket_orders = {}
+        # for product in ["PICNIC_BASKET1", "PICNIC_BASKET2"]:
+        #     if product in state.order_depths:
+        #         # Position closing logic
+        #         position = state.position.get(product, 0)
+        #         limit = self.strategy_config[product]["position_limit"]
+        #         if abs(position) > limit * 0.8:
+        #             od = state.order_depths[product]
+        #             if position > 0 and od.buy_orders:
+        #                 best_bid = max(od.buy_orders.keys())
+        #                 result[product].append(Order(product, best_bid, -position))
+        #             elif position < 0 and od.sell_orders:
+        #                 best_ask = min(od.sell_orders.keys())
+        #                 result[product].append(Order(product, best_ask, -position))
 
-                # Arbitrage logic
-                orders, component_orders = self._basket_arbitrage_strategy(product, state)
-                result[product].extend(orders)
-                for comp, comp_orders in component_orders.items():
-                    basket_orders.setdefault(comp, []).extend(comp_orders)
-        for product, orders in basket_orders.items():
-            result[product].extend(orders)
+        #         # Arbitrage logic
+        #         orders, component_orders = self._basket_arbitrage_strategy(product, state)
+        #         result[product].extend(orders)
+        #         for comp, comp_orders in component_orders.items():
+        #             basket_orders.setdefault(comp, []).extend(comp_orders)
+        # for product, orders in basket_orders.items():
+        #     result[product].extend(orders)
 
-        vr_symbol = "VOLCANIC_ROCK"
-        vr_mid = None
-        if vr_symbol in state.order_depths:
-            best_bid = max(state.order_depths[vr_symbol].buy_orders.keys(), default=0)
-            best_ask = min(state.order_depths[vr_symbol].sell_orders.keys(), default=0)
-            if best_bid and best_ask:
-                vr_mid = (best_bid + best_ask) / 2
-                self.history[vr_symbol]["prices"].append(vr_mid)
+        # vr_symbol = "VOLCANIC_ROCK"
+        # vr_mid = None
+        # if vr_symbol in state.order_depths:
+        #     best_bid = max(state.order_depths[vr_symbol].buy_orders.keys(), default=0)
+        #     best_ask = min(state.order_depths[vr_symbol].sell_orders.keys(), default=0)
+        #     if best_bid and best_ask:
+        #         vr_mid = (best_bid + best_ask) / 2
+        #         self.history[vr_symbol]["prices"].append(vr_mid)
 
-        if vr_mid:
-            sigma_daily = self._calculate_volcanic_volatility(vr_symbol)
-            voucher_orders = self._volcanic_voucher_strategy(state, vr_mid, sigma_daily)
-            for symbol, symbol_orders in voucher_orders.items():
-                result[symbol].extend(symbol_orders)
+        # if vr_mid:
+        #     sigma_daily = self._calculate_volcanic_volatility(vr_symbol)
+        #     voucher_orders = self._volcanic_voucher_strategy(state, vr_mid, sigma_daily)
+        #     for symbol, symbol_orders in voucher_orders.items():
+        #         result[symbol].extend(symbol_orders)
 
         # Handle MAGNIFICENT_MACARONS
         if "MAGNIFICENT_MACARONS" in state.observations.conversionObservations:
