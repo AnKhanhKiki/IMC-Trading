@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 import math
 import statistics
 from typing import Dict, List, Tuple
@@ -149,7 +150,9 @@ class Trader:
             "PICNIC_BASKET2": {"prices": [], "arb_opportunities": []},
             # Add new products to history
             "VOLCANIC_ROCK": {"prices": []},
-            "MAGNIFICENT_MACARONS": {"prices": [], "sunlight_index": [], "sugar_price": []} # Add MACARONS history
+            "MAGNIFICENT_MACARONS": {"prices": [], "coefficients": [
+                4.9625, -3.2939, 61.5134, -62.4988, -52.4436, 187.4687  # initial regression coefficients
+            ], "observations": []} # Add MACARONS history
         }
         for strike in voucher_strikes:
             symbol = f"VOLCANIC_ROCK_VOUCHER_{strike}"
@@ -439,65 +442,110 @@ class Trader:
         conversion_amount = 0
         product = "MAGNIFICENT_MACARONS"
         position = state.position.get(product, 0)
-
-        # Calculate effective prices based on tariffs and fees
+        
+        # Add current data to history
+        current_mid_price = (conversion_data.bidPrice + conversion_data.askPrice) / 2
+        
+        # Add price to history
+        self.history[product]["prices"].append(current_mid_price)
+        if len(self.history[product]["prices"]) > 1000:
+            self.history[product]["prices"] = self.history[product]["prices"][-1000:]
+        
+        # Store observation as [sugarPrice, sunlightIndex, transportFees, exportTariff, importTariff, midPrice]
+        current_observation = [
+            conversion_data.sugarPrice,
+            conversion_data.sunlightIndex, 
+            conversion_data.transportFees,
+            conversion_data.exportTariff,
+            conversion_data.importTariff,
+            current_mid_price
+        ]
+        
+        self.history[product]["observations"].append(current_observation)
+        if len(self.history[product]["observations"]) > 1000:
+            self.history[product]["observations"] = self.history[product]["observations"][-1000:]
+        
+        # Update regression coefficients every 20 observations
+        if len(self.history[product]["observations"]) >= 50 and len(self.history[product]["observations"]) % 20 == 0:
+            self._update_regression_coefficients(product)
+        
+        # Get current coefficients
+        coefficients = self.history[product]["coefficients"]
+        
+        # Calculate effective prices for conversion
         effective_sell_price = conversion_data.bidPrice - conversion_data.transportFees - conversion_data.exportTariff
         effective_buy_price = conversion_data.askPrice + conversion_data.transportFees + conversion_data.importTariff
         order_depth = state.order_depths.get(product, OrderDepth())
         best_bid = max(order_depth.buy_orders.keys(), default=0)
         best_ask = min(order_depth.sell_orders.keys(), default=float('inf'))
         
-        # Define reference values for sunlight and sugar price
-        sunlight_reference = 45  # Midpoint of expected range (70 + 20) / 2
-        sugar_reference = 202.5  # Midpoint of expected range (220 + 185) / 2
+        # Calculate estimated midPrice using current regression coefficients
+        est_mid_price = (
+            coefficients[0] * conversion_data.sugarPrice + 
+            coefficients[1] * conversion_data.sunlightIndex + 
+            coefficients[2] * conversion_data.transportFees + 
+            coefficients[3] * conversion_data.exportTariff + 
+            coefficients[4] * conversion_data.importTariff + 
+            coefficients[5]  # intercept
+        )
         
-        # Calculate factors with stronger coefficients to reflect their impact
-        sunlight_factor = (conversion_data.sunlightIndex - sunlight_reference) / sunlight_reference
-        sugar_factor = (conversion_data.sugarPrice - sugar_reference) / sugar_reference
+        # Calculate actual midPrice from market
+        actual_mid_price = (best_bid + best_ask) / 2 if best_bid > 0 and best_ask < float('inf') else est_mid_price
         
-        # Strengthen the adjustment factors based on observed correlation
-        # Negative correlation with sunlight (stronger), positive with sugar (stronger)
-        price_adjustment = (-0.12 * sunlight_factor + 0.15 * sugar_factor)
-        
-        # Apply adjustment to effective prices
-        adjusted_sell_price = effective_sell_price * (1 + price_adjustment)
-        adjusted_buy_price = effective_buy_price * (1 + price_adjustment)
+        # Calculate the price difference to determine if market is over/undervalued
+        price_difference = actual_mid_price - est_mid_price
         
         # Log values for debugging
         print(f"Sugar: {conversion_data.sugarPrice}, Sunlight: {conversion_data.sunlightIndex}")
-        print(f"Price adjustment: {price_adjustment:.4f}")
-        print(f"Effective sell: {effective_sell_price:.2f} → Adjusted: {adjusted_sell_price:.2f}")
-        print(f"Effective buy: {effective_buy_price:.2f} → Adjusted: {adjusted_buy_price:.2f}")
-
-        # Position management based on market outlook
-        # Be more aggressive buying when sugar high/sunlight low and selling when sugar low/sunlight high
-        position_limit = 75
-        position_target = position_limit * price_adjustment
-        position_bias = int(position_target)  # Positive means favor buying, negative means favor selling
+        print(f"Regression Equation: {coefficients[0]:.2f}*sugar + {coefficients[1]:.2f}*sunlight + {coefficients[2]:.2f}*transport + {coefficients[3]:.2f}*export + {coefficients[4]:.2f}*import + {coefficients[5]:.2f}")
+        print(f"Estimated midPrice: {est_mid_price:.2f}, Actual midPrice: {actual_mid_price:.2f}")
+        print(f"Price difference: {price_difference:.2f}")
         
-        # Sell logic - more aggressive when negative outlook (high sunlight, low sugar)
-        if best_bid > 0 and best_bid > adjusted_sell_price:
-            # Sell in market
-            available_quantity = order_depth.buy_orders.get(best_bid, 0)
-            max_sell_market = min(available_quantity, position_limit + position - position_bias)
-            if max_sell_market > 0:
-                orders.append(Order(product, best_bid, -max_sell_market))
-        elif adjusted_sell_price > best_bid:  # Sell via conversion if profitable compared to market
-            max_sell_conversion = min(10, position + position_limit - position_bias)
+        # Position management based on price difference
+        position_limit = 75
+        threshold = 2.0  # Threshold for determining if difference is significant
+        
+        # Sell logic - more aggressive when market price is above estimated price
+        if best_bid > 0:
+            if price_difference > threshold:  # Market overvalued - good time to sell
+                # Sell in market
+                available_quantity = order_depth.buy_orders.get(best_bid, 0)
+                max_sell_market = min(available_quantity, position_limit + position)
+                if max_sell_market > 0:
+                    orders.append(Order(product, best_bid, -max_sell_market))
+            elif best_bid > effective_sell_price:
+                # Sell in market at regular profit
+                available_quantity = order_depth.buy_orders.get(best_bid, 0)
+                max_sell_market = min(available_quantity, position_limit + position)
+                if max_sell_market > 0:
+                    orders.append(Order(product, best_bid, -max_sell_market))
+        
+        # Conversion sell logic
+        if effective_sell_price > best_bid and position > 0:
+            max_sell_conversion = min(10, position)
             if max_sell_conversion > 0:
                 conversion_amount -= max_sell_conversion
 
-        # Buy logic - more aggressive when positive outlook (low sunlight, high sugar)
-        if best_ask < float('inf') and best_ask < adjusted_buy_price:
-            # Buy from market
-            available_quantity = abs(order_depth.sell_orders.get(best_ask, 0))
-            max_buy_market = min(available_quantity, position_limit - position + position_bias)
-            if max_buy_market > 0:
-                orders.append(Order(product, best_ask, max_buy_market))
-        elif adjusted_buy_price < best_ask:  # Buy via conversion if profitable compared to market
-            profit_margin = 0.1  # Reduced margin requirement when we have strong signals
-            if best_ask - adjusted_buy_price > profit_margin:
-                max_buy_conversion = min(10, position_limit - position + position_bias)
+        # Buy logic - more aggressive when market price is below estimated price
+        if best_ask < float('inf'):
+            if price_difference < -threshold:  # Market undervalued - good time to buy
+                # Buy from market
+                available_quantity = abs(order_depth.sell_orders.get(best_ask, 0))
+                max_buy_market = min(available_quantity, position_limit - position)
+                if max_buy_market > 0:
+                    orders.append(Order(product, best_ask, max_buy_market))
+            elif best_ask < effective_buy_price:
+                # Buy from market at regular profit
+                available_quantity = abs(order_depth.sell_orders.get(best_ask, 0))
+                max_buy_market = min(available_quantity, position_limit - position)
+                if max_buy_market > 0:
+                    orders.append(Order(product, best_ask, max_buy_market))
+        
+        # Conversion buy logic
+        if effective_buy_price < best_ask and position < position_limit:
+            profit_margin = 0.2  # Profit margin requirement
+            if best_ask - effective_buy_price > profit_margin:
+                max_buy_conversion = min(10, position_limit - position)
                 if max_buy_conversion > 0:
                     conversion_amount += max_buy_conversion
 
@@ -505,6 +553,44 @@ class Trader:
         conversion_amount = max(-10, min(10, conversion_amount))
 
         return orders, conversion_amount
+
+    def _update_regression_coefficients(self, product):
+        """Update regression coefficients using numpy for matrix operations."""
+        try:
+            # Get observations
+            observations = np.array(self.history[product]["observations"])
+            
+            # Extract features and target
+            X = observations[:, :-1]  # All columns except the last (features)
+            y = observations[:, -1]   # Last column (midPrice)
+            
+            # Add column of ones for intercept
+            X_with_intercept = np.column_stack([np.ones(X.shape[0]), X])
+            
+            # Calculate coefficients using normal equation: β = (X^T X)^-1 X^T y
+            XT_X = np.dot(X_with_intercept.T, X_with_intercept)
+            XT_y = np.dot(X_with_intercept.T, y)
+            
+            try:
+                # Try to use direct matrix inverse
+                inv_XT_X = np.linalg.inv(XT_X)
+                coefficients = np.dot(inv_XT_X, XT_y)
+            except np.linalg.LinAlgError:
+                # If matrix is singular, use pseudo-inverse for more stability
+                inv_XT_X = np.linalg.pinv(XT_X)
+                coefficients = np.dot(inv_XT_X, XT_y)
+            
+            # Rearrange to match our format: [feature_coeffs, intercept]
+            intercept = coefficients[0]
+            feature_coefficients = coefficients[1:].tolist()
+            new_coefficients = feature_coefficients + [intercept]
+            
+            # Replace old coefficients with new ones
+            self.history[product]["coefficients"] = new_coefficients
+            
+        except Exception as e:
+            print(f"Error updating regression coefficients: {e}")
+            # Keep using the existing coefficients if there's an error
 
     def run(self, state: TradingState) -> Tuple[Dict[str, List[Order]], int, str]:
         self.current_round += 1  # Increment round counter
