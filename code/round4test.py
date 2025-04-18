@@ -619,7 +619,7 @@ class Trader:
             )
         
         # Adaptive threshold based on volatility
-        threshold = max(2.0, 0.4 * self.history[product]["price_volatility"])
+        threshold = max(0.01 * fair_price, 0.4 * self.history[product]["price_volatility"])
         
         # Log values for debugging
         print(f"Sugar: {conversion_data.sugarPrice}, Sunlight: {conversion_data.sunlightIndex}")
@@ -661,7 +661,7 @@ class Trader:
             aggression_factor = min(1.0, csi_diff / 10)  # Scale based on difference
             
             # Target position as percentage of limit based on CSI difference
-            target_position_pct = min(0.9, 0.5 + aggression_factor)
+            target_position_pct = min(1.0, 0.55 + aggression_factor * 0.8)
             target_position = int(position_limit * target_position_pct)
             
             print(f"CSI Strategy: Target position {target_position} units ({target_position_pct:.1%} of limit)")
@@ -674,10 +674,17 @@ class Trader:
                 if best_ask < float('inf'):
                     available_quantity = abs(order_depth.sell_orders.get(best_ask, 0))
                     buy_quantity = min(buy_quantity, available_quantity)
-                    
+
                     if buy_quantity > 0:
                         orders.append(Order(product, best_ask, buy_quantity))
                         print(f"CSI Strategy: Buying {buy_quantity} at {best_ask}")
+                    else:
+                        # No market liquidity – fallback to conversion
+                        effective_buy_price = conversion_data.askPrice + conversion_data.transportFees + conversion_data.importTariff
+                        if effective_buy_price < fair_price + threshold:
+                            conversion_amount = min(10, target_position - position)
+                            print(f"No market depth. Converting to buy {conversion_amount} units at {effective_buy_price:.2f}")
+
         
         # CASE 2: Normal market conditions - use fair price model
         else:
@@ -718,18 +725,28 @@ class Trader:
             hard_stop = pos_info["avg_entry_price"] * (1 - pos_info["hard_stop_pct"]) if pos_info["avg_entry_price"] > 0 else 0
             
             # Check if stop is triggered and we're not in crisis mode (below CSI)
-            if (actual_mid_price < trailing_stop or actual_mid_price < hard_stop) and not sunlight_below_csi:
-                if best_bid > 0:
-                    print(f"STOP LOSS TRIGGERED: Price {actual_mid_price:.2f} below stop at {max(trailing_stop, hard_stop):.2f}")
-                    # Exit position
-                    orders.append(Order(product, best_bid, -position))
+            # Track sunlight recovery time
+            if conversion_data.sunlightIndex > csi:
+                if "recovery_since" not in self.history[product]:
+                    self.history[product]["recovery_since"] = state.timestamp
+            else:
+                self.history[product].pop("recovery_since", None)
+
+            # Stop loss allowed only if sunlight has been above CSI for 10+ ticks
+            if position > 0 and "recovery_since" in self.history[product]:
+                if state.timestamp - self.history[product]["recovery_since"] > 10:
+                    if (actual_mid_price < trailing_stop or actual_mid_price < hard_stop):
+                        if best_bid > 0:
+                            print(f"STOP LOSS TRIGGERED: Price {actual_mid_price:.2f} below stop at {max(trailing_stop, hard_stop):.2f}")
+                            orders.append(Order(product, best_bid, -position))
+
         
         # CONVERSION LOGIC
         
         # Sell via conversion if we have a long position and it's profitable
         if position > 0 and effective_sell_price > best_bid:
             # Calculate profit including storage cost consideration 
-            conversion_profit = effective_sell_price - (best_bid - storage_impact)
+            conversion_profit = effective_sell_price - (fair_price - threshold)
             
             if conversion_profit > 0:
                 max_sell_conversion = min(10, position)
