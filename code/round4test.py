@@ -130,7 +130,7 @@ class Trader:
             "DJEMBES": {"position_limit": 60},
             # Add new products
             "VOLCANIC_ROCK": {"position_limit": 400},
-            "MAGNIFICENT_MACARONS": {"position_limit": 75, "CSI": 45} # Add MACARONS config
+            "MAGNIFICENT_MACARONS": {"position_limit": 75, "CSI": 45, "rounds_held": 0} # Add MACARONS config
         }
         # Add Volcanic Rock Vouchers to strategy config
         voucher_strikes = [9500, 9750, 10000, 10250, 10500]
@@ -563,19 +563,29 @@ class Trader:
                         if sell_quantity > 0 and best_bid > 0:
                             orders.append(Order(product, best_bid, -sell_quantity))
                             print(f"Taking profit: Selling {sell_quantity} units at {best_bid} ({profit_pct:.1%} profit)")
+
+        # Close position if we have been holding for too long
+        if position > 0:
+            self.strategy_config[product]["rounds_held"] += 1
+        if self.strategy_config[product]["rounds_held"] > 50:
+            if position > 0 and best_bid > 0:
+                orders.append(Order(product, best_bid, -position))
+                print(f"Closing position: Selling {position} units at {best_bid} - Rounds held exceeded limit")
+                self.strategy_config[product]["rounds_held"] = 0
                 
-                # Check stop-loss conditions
-                if (current_mid_price < trailing_stop_price or current_mid_price < hard_stop_price) and best_bid > 0:
-                    # Trigger stop-loss - exit position
-                    print(f"STOP LOSS TRIGGERED: Current: {current_mid_price}, Trailing: {trailing_stop_price}, Hard: {hard_stop_price}")
-                    orders.append(Order(product, best_bid, -position))
-            
-            # Look for good conversion opportunities - can only convert to sell if we have a long position
-            if effective_sell_price > best_bid and position > 0:
-                max_sell_conversion = min(10, position)
-                if max_sell_conversion > 0:
-                    conversion_amount = -max_sell_conversion  # Negative for selling
-                    print(f"Converting to sell {max_sell_conversion} units at effective price {effective_sell_price}")
+        # Check stop-loss conditions
+        if (current_mid_price < trailing_stop_price or current_mid_price < hard_stop_price) and best_bid > 0:
+            # Trigger stop-loss - exit position
+            print(f"STOP LOSS TRIGGERED: Current: {current_mid_price}, Trailing: {trailing_stop_price}, Hard: {hard_stop_price}")
+            self.history[product]["max_price_seen"] = current_mid_price  # Update max price seen
+            orders.append(Order(product, best_bid, -position))
+        
+        # Look for good conversion opportunities - can only convert to sell if we have a long position
+        if effective_sell_price > best_bid and position > 0:
+            max_sell_conversion = min(10, position)
+            if max_sell_conversion > 0:
+                conversion_amount = -max_sell_conversion  # Negative for selling
+                print(f"Converting to sell {max_sell_conversion} units at effective price {effective_sell_price}")
         
         # Make sure we're not requesting both buy and sell conversions
         # Conversion request should be:
