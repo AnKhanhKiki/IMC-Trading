@@ -730,6 +730,27 @@ class Trader:
         #         if buy_quantity > 0:
         #             orders.append(Order(product, best_ask, buy_quantity))
         #             print(f"Fair Price Strategy: Buying {buy_quantity} at {best_ask} (undervalued by {-price_difference:.2f})")
+
+        # CASE 2: Normal market conditions - post-panic shorting strategy
+        else:
+            recovery_mode = False
+            if "recovery_since" in self.history[product]:
+                recovery_ticks = state.timestamp - self.history[product]["recovery_since"]
+                if recovery_ticks > 5:  # Give it 5 ticks to stabilize post-crisis
+                    recovery_mode = True
+
+            if recovery_mode and best_bid > 0 and price_difference > threshold * 1.2:
+                # Overbought and fading panic = time to short
+                short_aggression = min(1.0, price_difference / (2 * threshold))
+                target_short = int((position_limit - abs(position)) * short_aggression)
+
+                # Limit to what's tradable now
+                available_quantity = order_depth.buy_orders.get(best_bid, 0)
+                sell_quantity = min(target_short, available_quantity)
+
+                if sell_quantity > 0:
+                    orders.append(Order(product, best_bid, -sell_quantity))
+                    print(f"Post-CSI Reversion: Shorting {sell_quantity} at {best_bid} (fade after panic)")
         
         # Check stop loss conditions if we have a long position
         if position > 0:
