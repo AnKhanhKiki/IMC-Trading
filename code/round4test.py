@@ -548,6 +548,9 @@ class Trader:
         conversion_amount = 0
         product = "MAGNIFICENT_MACARONS"
         position = state.position.get(product, 0)
+
+        current_mid_price = (conversion_data.bidPrice + conversion_data.askPrice) / 2
+
         
         if "positions" not in self.history[product]:
             self.history[product]["positions"] = {
@@ -563,9 +566,6 @@ class Trader:
             self.history[product]["positions"]["holding_ticks"] += 1
         else:
             self.history[product]["positions"]["holding_ticks"] = 0  # Reset on flat
-        
-        # Add current data to history
-        current_mid_price = (conversion_data.bidPrice + conversion_data.askPrice) / 2
         
         # Add price to history
         if conversion_data.sunlightIndex > self.strategy_config[product]["CSI"]:
