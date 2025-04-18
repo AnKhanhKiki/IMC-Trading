@@ -549,6 +549,21 @@ class Trader:
         product = "MAGNIFICENT_MACARONS"
         position = state.position.get(product, 0)
         
+        if "positions" not in self.history[product]:
+            self.history[product]["positions"] = {
+                "avg_entry_price": 0,
+                "max_price_seen": current_mid_price,
+                "stop_loss_pct": 0.10,
+                "hard_stop_pct": 0.15,
+                "holding_ticks": 0  # Add tick counter for long holding risk
+            }
+
+        # If we’re in a position, increment holding tick counter
+        if position != 0:
+            self.history[product]["positions"]["holding_ticks"] += 1
+        else:
+            self.history[product]["positions"]["holding_ticks"] = 0  # Reset on flat
+        
         # Add current data to history
         current_mid_price = (conversion_data.bidPrice + conversion_data.askPrice) / 2
         
@@ -726,10 +741,24 @@ class Trader:
             
             # Check if stop is triggered and we're not in crisis mode (below CSI)
             # Track sunlight recovery time
-            if (actual_mid_price < trailing_stop or actual_mid_price < hard_stop) and not sunlight_below_csi:
-                 if best_bid > 0:
-                     print(f"STOP LOSS TRIGGERED: Price {actual_mid_price:.2f} below stop at {max(trailing_stop, hard_stop):.2f}")
-                     orders.append(Order(product, best_bid, -position)) 
+            if conversion_data.sunlightIndex > csi:
+                if "recovery_since" not in self.history[product]:
+                    self.history[product]["recovery_since"] = state.timestamp
+            else:
+                self.history[product].pop("recovery_since", None)
+
+            # Stop loss allowed only if sunlight has been above CSI for 10+ ticks
+            if position > 0 and "recovery_since" in self.history[product]:
+                if state.timestamp - self.history[product]["recovery_since"] > 10:
+                    stop_loss_triggered = (actual_mid_price < trailing_stop or actual_mid_price < hard_stop)
+                    hold_too_long = self.history[product]["positions"]["holding_ticks"] >= 50
+
+                    if stop_loss_triggered or hold_too_long:
+                        reason = "TIMEOUT" if hold_too_long else "STOP LOSS"
+                        if best_bid > 0:
+                            print(f"{reason} TRIGGERED: Selling {position} at {best_bid}, holding {self.history[product]['positions']['holding_ticks']} ticks")
+                            orders.append(Order(product, best_bid, -position))
+                            self.history[product]["positions"]["holding_ticks"] = 0
 
         
         # CONVERSION LOGIC
