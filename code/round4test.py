@@ -666,36 +666,31 @@ class Trader:
                     orders.append(Order(product, best_bid, -scale_out_quantity))
                     print(f"CSI Scale-Out: Selling {scale_out_quantity} at {best_bid} (spike above fair)")
 
-            # === BUY STRATEGY (AGGRESSIVE IF WELL BELOW CSI, BUT ONLY IF STILL UNDERVALUED) ===
+            # === BUY STRATEGY (AGGRESSIVE IF WELL BELOW CSI) ===
             csi_diff = csi - conversion_data.sunlightIndex
             aggression_factor = min(1.0, csi_diff / 10)  # Scale based on difference
 
-            # Block new buys if price is already above fair + threshold (don't chase rally)
-            if actual_mid_price > fair_price + threshold:
-                print(f"🚫 CSI Buy Blocked: Market already over fair ({actual_mid_price:.2f} > {fair_price + threshold:.2f})")
-            else:
-                target_position_pct = min(1.0, 0.55 + aggression_factor * 0.8)
-                target_position = int(position_limit * target_position_pct)
+            target_position_pct = min(1.0, 0.55 + aggression_factor * 0.8)
+            target_position = int(position_limit * target_position_pct)
 
-                print(f"CSI Strategy: Target position {target_position} units ({target_position_pct:.1%} of limit)")
+            print(f"CSI Strategy: Target position {target_position} units ({target_position_pct:.1%} of limit)")
 
-                if position < target_position:
-                    buy_quantity = target_position - position
+            if position < target_position:
+                buy_quantity = target_position - position
 
-                    if best_ask < float('inf'):
-                        available_quantity = abs(order_depth.sell_orders.get(best_ask, 0))
-                        buy_quantity = min(buy_quantity, available_quantity)
+                if best_ask < float('inf'):
+                    available_quantity = abs(order_depth.sell_orders.get(best_ask, 0))
+                    buy_quantity = min(buy_quantity, available_quantity)
 
-                        if buy_quantity > 0:
-                            orders.append(Order(product, best_ask, buy_quantity))
-                            print(f"CSI Strategy: Buying {buy_quantity} at {best_ask}")
-                        else:
-                            # No market liquidity – fallback to conversion
-                            effective_buy_price = conversion_data.askPrice + conversion_data.transportFees + conversion_data.importTariff
-                            if effective_buy_price < fair_price + threshold:
-                                conversion_amount = min(10, target_position - position)
-                                print(f"No market depth. Converting to buy {conversion_amount} units at {effective_buy_price:.2f}")
-
+                    if buy_quantity > 0:
+                        orders.append(Order(product, best_ask, buy_quantity))
+                        print(f"CSI Strategy: Buying {buy_quantity} at {best_ask}")
+                    else:
+                        # No market liquidity – fallback to conversion
+                        effective_buy_price = conversion_data.askPrice + conversion_data.transportFees + conversion_data.importTariff
+                        if effective_buy_price < fair_price + threshold:
+                            conversion_amount = min(10, target_position - position)
+                            print(f"No market depth. Converting to buy {conversion_amount} units at {effective_buy_price:.2f}")
 
 
         # CASE 2: Normal market conditions - use fair price model
