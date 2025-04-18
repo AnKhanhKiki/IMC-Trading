@@ -700,57 +700,31 @@ class Trader:
                             conversion_amount = min(10, target_position - position)
                             print(f"No market depth. Converting to buy {conversion_amount} units at {effective_buy_price:.2f}")
 
-        
-        # CASE 2: Normal market conditions - use fair price model
-        # else:
-        #     # Sell logic - market price above fair price estimate
-        #     if best_bid > 0 and price_difference > threshold:
-        #         # How much to sell depends on the magnitude of overvaluation
-        #         sell_aggression = min(1.0, price_difference / (2 * threshold))
-        #         target_sell = int((position_limit + position) * sell_aggression)
-                
-        #         # Get available quantity at best bid
-        #         available_quantity = order_depth.buy_orders.get(best_bid, 0)
-        #         sell_quantity = min(target_sell, available_quantity)
-                
-        #         if sell_quantity > 0:
-        #             orders.append(Order(product, best_bid, -sell_quantity))
-        #             print(f"Fair Price Strategy: Selling {sell_quantity} at {best_bid} (overvalued by {price_difference:.2f})")
-            
-        #     # Buy logic - market price below fair price estimate
-        #     if best_ask < float('inf') and price_difference < -threshold:
-        #         # How much to buy depends on the magnitude of undervaluation
-        #         buy_aggression = min(1.0, -price_difference / (2 * threshold))
-        #         target_buy = int((position_limit - position) * buy_aggression)
-                
-        #         # Get available quantity at best ask
-        #         available_quantity = abs(order_depth.sell_orders.get(best_ask, 0))
-        #         buy_quantity = min(target_buy, available_quantity)
-                
-        #         if buy_quantity > 0:
-        #             orders.append(Order(product, best_ask, buy_quantity))
-        #             print(f"Fair Price Strategy: Buying {buy_quantity} at {best_ask} (undervalued by {-price_difference:.2f})")
 
-        # CASE 2: Normal market conditions - post-panic shorting strategy
+        # === CASE 2 : NORMAL‑MARKET — MEAN‑REVERSION, SHORT‑ONLY ===
         else:
-            recovery_mode = False
-            if "recovery_since" in self.history[product]:
-                recovery_ticks = state.timestamp - self.history[product]["recovery_since"]
-                if recovery_ticks > 5:  # Give it 5 ticks to stabilize post-crisis
-                    recovery_mode = True
+            # -------- SHORT when price is well above fair value --------
+            if best_bid > 0 and price_difference > 1.5 * threshold:
+                # Size grows with mispricing but capped by limits
+                sell_aggr = min(1.0, price_difference / (3 * threshold))
+                target_short = int(position_limit * sell_aggr)          # desired absolute short
+                if position > 0:                                        # if still long, flatten first
+                    target_short = max(0, target_short - position)
+                short_qty = min(target_short, order_depth.buy_orders.get(best_bid, 0))
 
-            if recovery_mode and best_bid > 0 and price_difference > threshold * 1.2:
-                # Overbought and fading panic = time to short
-                short_aggression = min(1.0, price_difference / (2 * threshold))
-                target_short = int((position_limit - abs(position)) * short_aggression)
+                if short_qty > 0:
+                    orders.append(Order(product, best_bid, -short_qty))
+                    print(f"NM SHORT: Selling {short_qty} @ {best_bid} (Δ={price_difference:.2f})")
 
-                # Limit to what's tradable now
-                available_quantity = order_depth.buy_orders.get(best_bid, 0)
-                sell_quantity = min(target_short, available_quantity)
+            # -------- COVER shorts when price normalises --------
+            if position < 0 and price_difference < -0.3 * threshold:
+                cover_qty = min(abs(position), abs(order_depth.sell_orders.get(best_ask, 0)))
+                if cover_qty > 0 and best_ask < float('inf'):
+                    orders.append(Order(product, best_ask, cover_qty))
+                    print(f"NM COVER: Buying {cover_qty} @ {best_ask} (back to fair)")
 
-                if sell_quantity > 0:
-                    orders.append(Order(product, best_bid, -sell_quantity))
-                    print(f"Post-CSI Reversion: Shorting {sell_quantity} at {best_bid} (fade after panic)")
+                
+        
         
         # Check stop loss conditions if we have a long position
         if position > 0:
