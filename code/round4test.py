@@ -726,19 +726,10 @@ class Trader:
             
             # Check if stop is triggered and we're not in crisis mode (below CSI)
             # Track sunlight recovery time
-            if conversion_data.sunlightIndex > csi:
-                if "recovery_since" not in self.history[product]:
-                    self.history[product]["recovery_since"] = state.timestamp
-            else:
-                self.history[product].pop("recovery_since", None)
-
-            # Stop loss allowed only if sunlight has been above CSI for 10+ ticks
-            if position > 0 and "recovery_since" in self.history[product]:
-                if state.timestamp - self.history[product]["recovery_since"] > 10:
-                    if (actual_mid_price < trailing_stop or actual_mid_price < hard_stop):
-                        if best_bid > 0:
-                            print(f"STOP LOSS TRIGGERED: Price {actual_mid_price:.2f} below stop at {max(trailing_stop, hard_stop):.2f}")
-                            orders.append(Order(product, best_bid, -position))
+            if (actual_mid_price < trailing_stop or actual_mid_price < hard_stop) and not sunlight_below_csi:
+                 if best_bid > 0:
+                     print(f"STOP LOSS TRIGGERED: Price {actual_mid_price:.2f} below stop at {max(trailing_stop, hard_stop):.2f}")
+                     orders.append(Order(product, best_bid, -position)) 
 
         
         # CONVERSION LOGIC
