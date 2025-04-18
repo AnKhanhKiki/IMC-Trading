@@ -656,21 +656,28 @@ class Trader:
         
         # CASE 1: Sunlight below CSI - aggressive long strategy
         if sunlight_below_csi:
-            # Calculate how aggressively to buy based on how far below CSI
+            # === SCALE OUT IF SPIKE OCCURS ABOVE FAIR VALUE ===
+            if actual_mid_price > fair_price + threshold and position > 0:
+                spike_excess = actual_mid_price - fair_price
+                scale_out_fraction = min(0.6, spike_excess / (2 * threshold))  # up to 60% exit
+                scale_out_quantity = max(1, int(position * scale_out_fraction))
+
+                if best_bid > 0 and scale_out_quantity > 0:
+                    orders.append(Order(product, best_bid, -scale_out_quantity))
+                    print(f"CSI Scale-Out: Selling {scale_out_quantity} at {best_bid} (spike above fair)")
+
+            # === BUY STRATEGY (AGGRESSIVE IF WELL BELOW CSI) ===
             csi_diff = csi - conversion_data.sunlightIndex
             aggression_factor = min(1.0, csi_diff / 10)  # Scale based on difference
-            
-            # Target position as percentage of limit based on CSI difference
+
             target_position_pct = min(1.0, 0.55 + aggression_factor * 0.8)
             target_position = int(position_limit * target_position_pct)
-            
+
             print(f"CSI Strategy: Target position {target_position} units ({target_position_pct:.1%} of limit)")
-            
-            # Only buy if we don't have enough already
+
             if position < target_position:
                 buy_quantity = target_position - position
-                
-                # Check if there are sell orders to match against
+
                 if best_ask < float('inf'):
                     available_quantity = abs(order_depth.sell_orders.get(best_ask, 0))
                     buy_quantity = min(buy_quantity, available_quantity)
@@ -685,7 +692,7 @@ class Trader:
                             conversion_amount = min(10, target_position - position)
                             print(f"No market depth. Converting to buy {conversion_amount} units at {effective_buy_price:.2f}")
 
-        
+
         # CASE 2: Normal market conditions - use fair price model
         else:
             # Sell logic - market price above fair price estimate
@@ -716,15 +723,19 @@ class Trader:
                     orders.append(Order(product, best_ask, buy_quantity))
                     print(f"Fair Price Strategy: Buying {buy_quantity} at {best_ask} (undervalued by {-price_difference:.2f})")
         
-        # Check stop loss conditions if we have a long position
+        # Check stop loss and storage duration if we have a long position
         if position > 0:
             pos_info = self.history[product]["positions"]
-            
+
+            # Add storage clock tracking
+            if "held_since" not in pos_info:
+                pos_info["held_since"] = state.timestamp
+            holding_duration = state.timestamp - pos_info["held_since"]
+
             # Calculate stop prices
             trailing_stop = pos_info["max_price_seen"] * (1 - pos_info["stop_loss_pct"])
             hard_stop = pos_info["avg_entry_price"] * (1 - pos_info["hard_stop_pct"]) if pos_info["avg_entry_price"] > 0 else 0
-            
-            # Check if stop is triggered and we're not in crisis mode (below CSI)
+
             # Track sunlight recovery time
             if conversion_data.sunlightIndex > csi:
                 if "recovery_since" not in self.history[product]:
@@ -732,13 +743,19 @@ class Trader:
             else:
                 self.history[product].pop("recovery_since", None)
 
-            # Stop loss allowed only if sunlight has been above CSI for 10+ ticks
-            if position > 0 and "recovery_since" in self.history[product]:
-                if state.timestamp - self.history[product]["recovery_since"] > 10:
-                    if (actual_mid_price < trailing_stop or actual_mid_price < hard_stop):
+            # Stop loss or storage timeout allowed only if sunlight above CSI for 10+ ticks
+            if "recovery_since" in self.history[product]:
+                recovery_duration = state.timestamp - self.history[product]["recovery_since"]
+                if recovery_duration > 10:
+                    # Exit if stop hit OR we’ve held too long (e.g. 50 ticks)
+                    if (actual_mid_price < trailing_stop or actual_mid_price < hard_stop or holding_duration > 50):
                         if best_bid > 0:
-                            print(f"STOP LOSS TRIGGERED: Price {actual_mid_price:.2f} below stop at {max(trailing_stop, hard_stop):.2f}")
+                            reason = "timeout" if holding_duration > 50 else "stop loss"
+                            print(f"EXIT {reason.upper()}: Price {actual_mid_price:.2f}, holding {holding_duration} ticks")
                             orders.append(Order(product, best_bid, -position))
+                            # Reset holding timer
+                            pos_info["held_since"] = state.timestamp
+
 
         
         # CONVERSION LOGIC
@@ -794,14 +811,17 @@ class Trader:
                 
                 # Update average entry price
                 if current_position <= 0:
-                    # New position, set avg price directly
                     self.history[product]["positions"]["avg_entry_price"] = total_cost / total_quantity
+                    self.history[product]["positions"]["held_since"] = state.timestamp  # Reset clock
                 else:
-                    # Update existing position with weighted average
+                    new_total_position = current_position + total_quantity
                     self.history[product]["positions"]["avg_entry_price"] = (
-                        (current_avg_price * current_position + total_cost) / 
-                        (current_position + total_quantity)
+                        (current_avg_price * current_position + total_cost) / new_total_position
                     )
+                    # Only reset timer if position increased significantly
+                    if total_quantity > 0.2 * new_total_position:
+                        self.history[product]["positions"]["held_since"] = state.timestamp
+
         
         return orders, conversion_amount
 
@@ -810,66 +830,66 @@ class Trader:
         result = {product: [] for product in self.strategy_config}
         conversion_requests = 0 # Initialize conversion requests
 
-        # # Existing strategy processing
-        # for product in state.order_depths:
-        #     if product not in self.strategy_config:
-        #         continue
-        #     od = state.order_depths[product]
-        #     position = state.position.get(product, 0)
-        #     best_bid = max(od.buy_orders.keys(), default=0)
-        #     best_ask = min(od.sell_orders.keys(), default=0)
-        #     mid = (best_bid + best_ask) / 2 if best_bid and best_ask else 0
-        #     self.history[product]["prices"].append(mid)
-        #     if product in ["CROISSANTS", "JAMS", "DJEMBES"]:
-        #         self.history[product]["best_bid"].append(best_bid)
-        #         self.history[product]["best_ask"].append(best_ask)
-        #     elif product == "RAINFOREST_RESIN":
-        #         orders = self._resin_strategy(od, position, mid)
-        #         result[product] = orders
-        #     elif product == "KELP":
-        #         orders = self._kelp_strategy(position, mid, best_bid, best_ask)
-        #         result[product] = orders
-        #     elif product == "SQUID_INK":
-        #         orders = self._squid_strategy(od, position, mid, best_bid, best_ask)
-        #         result[product] = orders
+        # Existing strategy processing
+        for product in state.order_depths:
+            if product not in self.strategy_config:
+                continue
+            od = state.order_depths[product]
+            position = state.position.get(product, 0)
+            best_bid = max(od.buy_orders.keys(), default=0)
+            best_ask = min(od.sell_orders.keys(), default=0)
+            mid = (best_bid + best_ask) / 2 if best_bid and best_ask else 0
+            self.history[product]["prices"].append(mid)
+            if product in ["CROISSANTS", "JAMS", "DJEMBES"]:
+                self.history[product]["best_bid"].append(best_bid)
+                self.history[product]["best_ask"].append(best_ask)
+            elif product == "RAINFOREST_RESIN":
+                orders = self._resin_strategy(od, position, mid)
+                result[product] = orders
+            elif product == "KELP":
+                orders = self._kelp_strategy(position, mid, best_bid, best_ask)
+                result[product] = orders
+            elif product == "SQUID_INK":
+                orders = self._squid_strategy(od, position, mid, best_bid, best_ask)
+                result[product] = orders
 
-        # basket_orders = {}
-        # for product in ["PICNIC_BASKET1", "PICNIC_BASKET2"]:
-        #     if product in state.order_depths:
-        #         # Position closing logic
-        #         position = state.position.get(product, 0)
-        #         limit = self.strategy_config[product]["position_limit"]
-        #         if abs(position) > limit * 0.8:
-        #             od = state.order_depths[product]
-        #             if position > 0 and od.buy_orders:
-        #                 best_bid = max(od.buy_orders.keys())
-        #                 result[product].append(Order(product, best_bid, -position))
-        #             elif position < 0 and od.sell_orders:
-        #                 best_ask = min(od.sell_orders.keys())
-        #                 result[product].append(Order(product, best_ask, -position))
+        basket_orders = {}
+        for product in ["PICNIC_BASKET1", "PICNIC_BASKET2"]:
+            if product in state.order_depths:
+                # Position closing logic
+                position = state.position.get(product, 0)
+                limit = self.strategy_config[product]["position_limit"]
+                if abs(position) > limit * 0.8:
+                    od = state.order_depths[product]
+                    if position > 0 and od.buy_orders:
+                        best_bid = max(od.buy_orders.keys())
+                        result[product].append(Order(product, best_bid, -position))
+                    elif position < 0 and od.sell_orders:
+                        best_ask = min(od.sell_orders.keys())
+                        result[product].append(Order(product, best_ask, -position))
 
-        #         # Arbitrage logic
-        #         orders, component_orders = self._basket_arbitrage_strategy(product, state)
-        #         result[product].extend(orders)
-        #         for comp, comp_orders in component_orders.items():
-        #             basket_orders.setdefault(comp, []).extend(comp_orders)
-        # for product, orders in basket_orders.items():
-        #     result[product].extend(orders)
+                # Arbitrage logic
+                orders, component_orders = self._basket_arbitrage_strategy(product, state)
+                result[product].extend(orders)
+                for comp, comp_orders in component_orders.items():
+                    basket_orders.setdefault(comp, []).extend(comp_orders)
+        for product, orders in basket_orders.items():
+            result[product].extend(orders)
 
-        # vr_symbol = "VOLCANIC_ROCK"
-        # vr_mid = None
-        # if vr_symbol in state.order_depths:
-        #     best_bid = max(state.order_depths[vr_symbol].buy_orders.keys(), default=0)
-        #     best_ask = min(state.order_depths[vr_symbol].sell_orders.keys(), default=0)
-        #     if best_bid and best_ask:
-        #         vr_mid = (best_bid + best_ask) / 2
-        #         self.history[vr_symbol]["prices"].append(vr_mid)
+        vr_symbol = "VOLCANIC_ROCK"
+        vr_mid = None
+        if vr_symbol in state.order_depths:
+            best_bid = max(state.order_depths[vr_symbol].buy_orders.keys(), default=0)
+            best_ask = min(state.order_depths[vr_symbol].sell_orders.keys(), default=0)
+            if best_bid and best_ask:
+                vr_mid = (best_bid + best_ask) / 2
+                self.history[vr_symbol]["prices"].append(vr_mid)
 
-        # if vr_mid:
-        #     sigma_daily = self._calculate_volcanic_volatility(vr_symbol)
-        #     voucher_orders = self._volcanic_voucher_strategy(state, vr_mid, sigma_daily)
-        #     for symbol, symbol_orders in voucher_orders.items():
-        #         result[symbol].extend(symbol_orders)
+        if vr_mid:
+            sigma_daily = self._calculate_volcanic_volatility(vr_symbol)
+            voucher_orders = self._volcanic_voucher_strategy(state, vr_mid, sigma_daily)
+            for symbol, symbol_orders in voucher_orders.items():
+                result[symbol].extend(symbol_orders)
 
         # Handle MAGNIFICENT_MACARONS
         if "MAGNIFICENT_MACARONS" in state.observations.conversionObservations:
