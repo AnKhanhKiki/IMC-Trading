@@ -498,6 +498,9 @@ class Trader:
                 "intercept": intercept,
                 "r_squared": r_squared
             }
+
+            # Clear observations to avoid overfitting
+            self.history[product]["observations"] = []
             
             # Print results
             print(f"Updated Sunlight-Sugar Regression:")
@@ -583,7 +586,9 @@ class Trader:
             current_mid_price
         ]
         
-        self.history[product]["observations"].append(current_observation)
+        # Only store observations when sunlight is above CSI
+        if conversion_data.sunlightIndex > self.strategy_config[product]["CSI"]:
+            self.history[product]["observations"].append(current_observation)
         if len(self.history[product]["observations"]) > 1000:
             self.history[product]["observations"] = self.history[product]["observations"][-1000:]
         
@@ -780,6 +785,7 @@ class Trader:
                             print(f"{reason} TRIGGERED: Selling {position} at {best_bid}, holding {self.history[product]['positions']['holding_ticks']} ticks")
                             orders.append(Order(product, best_bid, -position))
                             self.history[product]["positions"]["holding_ticks"] = 0
+                            self.history[product]["positions"]["max_price_seen"] = current_mid_price
 
         
         # CONVERSION LOGIC
