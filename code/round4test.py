@@ -150,9 +150,12 @@ class Trader:
             "PICNIC_BASKET2": {"prices": [], "arb_opportunities": []},
             # Add new products to history
             "VOLCANIC_ROCK": {"prices": []},
-            "MAGNIFICENT_MACARONS": {"prices": [], "coefficients": [
-                4.9625, -3.2939, 61.5134, -62.4988, -52.4436, 187.4687  # initial regression coefficients
-            ], "observations": []} # Add MACARONS history
+            "MAGNIFICENT_MACARONS": {"prices": [], "sunlight_sugar_regression": {
+                "sunlight_coef": -2.5135,
+                "sugar_coef": 3.5815,
+                "intercept": 76.7563,
+                "r_squared": 0.2108
+            }, "observations": []} # Add MACARONS history
         }
         for strike in voucher_strikes:
             symbol = f"VOLCANIC_ROCK_VOUCHER_{strike}"
@@ -436,6 +439,109 @@ class Trader:
             orders[symbol] = symbol_orders
 
         return orders
+    
+    def _update_sunlight_sugar_regression(self, product):
+        """
+        Update regression coefficients focusing specifically on sunlight and sugar price.
+        This analysis aims to find the relationship between:
+        midPrice = a*sunlightIndex + b*sugarPrice + c
+        
+        Where a, b, and c are the coefficients we're solving for.
+        """
+        try:
+            # Get observations
+            observations = np.array(self.history[product]["observations"])
+            
+            if len(observations) < 30:
+                print("Not enough data points for regression analysis yet")
+                return
+                
+            # Extract only the relevant features
+            sunlight_index = observations[:, 1]  # sunlightIndex is at index 1
+            sugar_price = observations[:, 0]     # sugarPrice is at index 0
+            mid_price = observations[:, -1]      # midPrice is the last element
+            
+            # Create feature matrix with sunlight and sugar
+            X = np.column_stack([sunlight_index, sugar_price])
+            
+            # Add column of ones for intercept
+            X_with_intercept = np.column_stack([np.ones(X.shape[0]), X])
+            
+            # Calculate coefficients using normal equation: β = (X^T X)^-1 X^T y
+            XT_X = np.dot(X_with_intercept.T, X_with_intercept)
+            XT_y = np.dot(X_with_intercept.T, mid_price)
+            
+            try:
+                # Try to use direct matrix inverse
+                inv_XT_X = np.linalg.inv(XT_X)
+                coefficients = np.dot(inv_XT_X, XT_y)
+            except np.linalg.LinAlgError:
+                # If matrix is singular, use pseudo-inverse for more stability
+                inv_XT_X = np.linalg.pinv(XT_X)
+                coefficients = np.dot(inv_XT_X, XT_y)
+            
+            # Store coefficients as [sunlight_coef, sugar_coef, intercept]
+            sunlight_coef = coefficients[1]
+            sugar_coef = coefficients[2]
+            intercept = coefficients[0]
+            
+            # Calculate R² to evaluate model fit
+            y_pred = np.dot(X_with_intercept, coefficients)
+            ss_total = np.sum((mid_price - np.mean(mid_price))**2)
+            ss_residual = np.sum((mid_price - y_pred)**2)
+            r_squared = 1 - (ss_residual / ss_total)
+            
+            # Store regression results
+            self.history[product]["sunlight_sugar_regression"] = {
+                "sunlight_coef": sunlight_coef,
+                "sugar_coef": sugar_coef,
+                "intercept": intercept,
+                "r_squared": r_squared
+            }
+            
+            # Print results
+            print(f"Updated Sunlight-Sugar Regression:")
+            print(f"midPrice = {sugar_coef:.2f}*sugarPrice + {sunlight_coef:.2f}*sunlightIndex + {intercept:.2f}")
+            print(f"R² = {r_squared:.4f}")
+            
+        except Exception as e:
+            print(f"Error updating sunlight-sugar regression: {e}")
+
+    def _estimate_fair_price(self, product, sunlight_index, sugar_price):
+        """
+        Estimate the fair price of macarons using the sunlight-sugar regression model
+        
+        Returns:
+            float: Estimated fair price
+            float: CSI value from config
+        """
+        # Check if we have regression results
+        if "sunlight_sugar_regression" not in self.history[product]:
+            return None, self.strategy_config["MAGNIFICENT_MACARONS"]["CSI"]
+        
+        # Get regression coefficients
+        reg = self.history[product]["sunlight_sugar_regression"]
+        
+        # Calculate basic fair price using regression
+        fair_price = (
+            reg["sugar_coef"] * sugar_price +
+            reg["sunlight_coef"] * sunlight_index +
+            reg["intercept"]
+        )
+        
+        # Get CSI from strategy config
+        csi = self.strategy_config["MAGNIFICENT_MACARONS"]["CSI"]
+        
+        # Apply CSI adjustment if sunlight is below CSI
+        if sunlight_index < csi:
+            # Calculate adjustment based on how far below CSI
+            csi_diff = csi - sunlight_index
+            # Amplify price estimate when below CSI
+            csi_premium = csi_diff * abs(reg["sunlight_coef"]) * 2.5
+            fair_price += csi_premium
+            print(f"Applied CSI premium: +{csi_premium:.2f} (sunlight {sunlight_index:.2f} vs CSI {csi:.2f})")
+        
+        return fair_price, csi
 
     def _macarons_strategy(self, state: TradingState, conversion_data: ConversionObservation) -> Tuple[List[Order], int]:
         orders = []
@@ -447,36 +553,216 @@ class Trader:
         current_mid_price = (conversion_data.bidPrice + conversion_data.askPrice) / 2
         
         # Add price to history
-        self.history[product]["prices"].append(current_mid_price)
+        if conversion_data.sunlightIndex > self.strategy_config[product]["CSI"]:
+            self.history[product]["prices"].append(current_mid_price)
         if len(self.history[product]["prices"]) > 1000:
             self.history[product]["prices"] = self.history[product]["prices"][-1000:]
         
-        # Store current sunlight index for reference
-        current_sunlight = conversion_data.sunlightIndex
+        # Store observation as [sugarPrice, sunlightIndex, transportFees, exportTariff, importTariff, midPrice]
+        current_observation = [
+            conversion_data.sugarPrice,
+            conversion_data.sunlightIndex, 
+            conversion_data.transportFees,
+            conversion_data.exportTariff,
+            conversion_data.importTariff,
+            current_mid_price
+        ]
         
-        # Get the CSI threshold from strategy config
-        csi_threshold = self.strategy_config["MAGNIFICENT_MACARONS"]["CSI"]
+        self.history[product]["observations"].append(current_observation)
+        if len(self.history[product]["observations"]) > 1000:
+            self.history[product]["observations"] = self.history[product]["observations"][-1000:]
         
-        # Order depth and best prices
-        order_depth = state.order_depths.get(product, OrderDepth())
-        best_bid = max(order_depth.buy_orders.keys(), default=0)
-        best_ask = min(order_depth.sell_orders.keys(), default=float('inf'))
+        # Update regression coefficients periodically
+        if len(self.history[product]["observations"]) >= 50 and len(self.history[product]["observations"]) % 20 == 0:
+            self._update_sunlight_sugar_regression(product)
         
         # Calculate effective prices for conversion
         effective_sell_price = conversion_data.bidPrice - conversion_data.transportFees - conversion_data.exportTariff
         effective_buy_price = conversion_data.askPrice + conversion_data.transportFees + conversion_data.importTariff
         
-        # Stop-loss calculation
-        # Track the average entry price for position
-        if "avg_entry_price" not in self.history[product]:
-            self.history[product]["avg_entry_price"] = 0
+        # Get market order book
+        order_depth = state.order_depths.get(product, OrderDepth())
+        best_bid = max(order_depth.buy_orders.keys(), default=0)
+        best_ask = min(order_depth.sell_orders.keys(), default=float('inf'))
         
-        if "max_price_seen" not in self.history[product]:
-            self.history[product]["max_price_seen"] = current_mid_price
-        elif current_mid_price > self.history[product]["max_price_seen"]:
-            self.history[product]["max_price_seen"] = current_mid_price
+        # Calculate actual midPrice from market
+        actual_mid_price = (best_bid + best_ask) / 2 if best_bid > 0 and best_ask < float('inf') else current_mid_price
         
-        # Update average entry price for new buys
+        # Estimate fair price using regression model
+        fair_price, csi = self._estimate_fair_price(
+            product, 
+            conversion_data.sunlightIndex,
+            conversion_data.sugarPrice
+        )
+        
+        # If we don't have a regression model yet, use a simple approach
+        if fair_price is None:
+            fair_price = actual_mid_price
+        
+        # Calculate the price difference to determine if market is over/undervalued
+        price_difference = actual_mid_price - fair_price
+        
+        # Position management
+        position_limit = 75
+        
+        # Dynamic threshold based on observed volatility
+        if "price_volatility" not in self.history[product]:
+            self.history[product]["price_volatility"] = 5.0  # Initial value
+        
+        # Update volatility estimate (simple exponential moving average)
+        if len(self.history[product]["prices"]) > 1:
+            latest_return = abs(self.history[product]["prices"][-1] - self.history[product]["prices"][-2])
+            alpha = 0.1  # Smoothing factor
+            self.history[product]["price_volatility"] = (
+                (1 - alpha) * self.history[product]["price_volatility"] + 
+                alpha * latest_return
+            )
+        
+        # Adaptive threshold based on volatility
+        threshold = max(2.0, 0.4 * self.history[product]["price_volatility"])
+        
+        # Log values for debugging
+        print(f"Sugar: {conversion_data.sugarPrice}, Sunlight: {conversion_data.sunlightIndex}")
+        if "sunlight_sugar_regression" in self.history[product]:
+            reg = self.history[product]["sunlight_sugar_regression"]
+            print(f"Regression: {reg['sugar_coef']:.2f}*sugar + {reg['sunlight_coef']:.2f}*sunlight + {reg['intercept']:.2f}, R²: {reg['r_squared']:.4f}")
+        print(f"Fair Price: {fair_price:.2f}, Actual Mid: {actual_mid_price:.2f}")
+        print(f"Price difference: {price_difference:.2f}, Threshold: {threshold:.2f}")
+        print(f"Current Volatility: {self.history[product]['price_volatility']:.2f}")
+        
+        # Check if sunlight is below CSI (critical trading condition)
+        sunlight_below_csi = False
+        if conversion_data.sunlightIndex < csi:
+            sunlight_below_csi = True
+            print(f"ALERT: Sunlight ({conversion_data.sunlightIndex:.2f}) below CSI ({csi:.2f})")
+        
+        # Calculate storage cost consideration (0.1 per unit per timestamp)
+        storage_impact = 0.1  # Cost per unit per timestamp
+        
+        # Tracking entry prices and stop losses
+        if "positions" not in self.history[product]:
+            self.history[product]["positions"] = {
+                "avg_entry_price": 0,
+                "max_price_seen": current_mid_price,
+                "stop_loss_pct": 0.10,  # 10% trailing stop
+                "hard_stop_pct": 0.15   # 15% hard stop from entry
+            }
+        
+        # Update max price seen (for trailing stop)
+        if current_mid_price > self.history[product]["positions"]["max_price_seen"]:
+            self.history[product]["positions"]["max_price_seen"] = current_mid_price
+        
+        # TRADING LOGIC
+        
+        # CASE 1: Sunlight below CSI - aggressive long strategy
+        if sunlight_below_csi:
+            # Calculate how aggressively to buy based on how far below CSI
+            csi_diff = csi - conversion_data.sunlightIndex
+            aggression_factor = min(1.0, csi_diff / 10)  # Scale based on difference
+            
+            # Target position as percentage of limit based on CSI difference
+            target_position_pct = min(0.9, 0.5 + aggression_factor)
+            target_position = int(position_limit * target_position_pct)
+            
+            print(f"CSI Strategy: Target position {target_position} units ({target_position_pct:.1%} of limit)")
+            
+            # Only buy if we don't have enough already
+            if position < target_position:
+                buy_quantity = target_position - position
+                
+                # Check if there are sell orders to match against
+                if best_ask < float('inf'):
+                    available_quantity = abs(order_depth.sell_orders.get(best_ask, 0))
+                    buy_quantity = min(buy_quantity, available_quantity)
+                    
+                    if buy_quantity > 0:
+                        orders.append(Order(product, best_ask, buy_quantity))
+                        print(f"CSI Strategy: Buying {buy_quantity} at {best_ask}")
+        
+        # CASE 2: Normal market conditions - use fair price model
+        else:
+            # Sell logic - market price above fair price estimate
+            if best_bid > 0 and price_difference > threshold:
+                # How much to sell depends on the magnitude of overvaluation
+                sell_aggression = min(1.0, price_difference / (2 * threshold))
+                target_sell = int((position_limit + position) * sell_aggression)
+                
+                # Get available quantity at best bid
+                available_quantity = order_depth.buy_orders.get(best_bid, 0)
+                sell_quantity = min(target_sell, available_quantity)
+                
+                if sell_quantity > 0:
+                    orders.append(Order(product, best_bid, -sell_quantity))
+                    print(f"Fair Price Strategy: Selling {sell_quantity} at {best_bid} (overvalued by {price_difference:.2f})")
+            
+            # Buy logic - market price below fair price estimate
+            if best_ask < float('inf') and price_difference < -threshold:
+                # How much to buy depends on the magnitude of undervaluation
+                buy_aggression = min(1.0, -price_difference / (2 * threshold))
+                target_buy = int((position_limit - position) * buy_aggression)
+                
+                # Get available quantity at best ask
+                available_quantity = abs(order_depth.sell_orders.get(best_ask, 0))
+                buy_quantity = min(target_buy, available_quantity)
+                
+                if buy_quantity > 0:
+                    orders.append(Order(product, best_ask, buy_quantity))
+                    print(f"Fair Price Strategy: Buying {buy_quantity} at {best_ask} (undervalued by {-price_difference:.2f})")
+        
+        # Check stop loss conditions if we have a long position
+        if position > 0:
+            pos_info = self.history[product]["positions"]
+            
+            # Calculate stop prices
+            trailing_stop = pos_info["max_price_seen"] * (1 - pos_info["stop_loss_pct"])
+            hard_stop = pos_info["avg_entry_price"] * (1 - pos_info["hard_stop_pct"]) if pos_info["avg_entry_price"] > 0 else 0
+            
+            # Check if stop is triggered and we're not in crisis mode (below CSI)
+            if (actual_mid_price < trailing_stop or actual_mid_price < hard_stop) and not sunlight_below_csi:
+                if best_bid > 0:
+                    print(f"STOP LOSS TRIGGERED: Price {actual_mid_price:.2f} below stop at {max(trailing_stop, hard_stop):.2f}")
+                    # Exit position
+                    orders.append(Order(product, best_bid, -position))
+        
+        # CONVERSION LOGIC
+        
+        # Sell via conversion if we have a long position and it's profitable
+        if position > 0 and effective_sell_price > best_bid:
+            # Calculate profit including storage cost consideration 
+            conversion_profit = effective_sell_price - (best_bid - storage_impact)
+            
+            if conversion_profit > 0:
+                max_sell_conversion = min(10, position)
+                if max_sell_conversion > 0:
+                    conversion_amount = -max_sell_conversion  # Negative for selling
+                    print(f"Converting to sell {max_sell_conversion} units at {effective_sell_price:.2f}")
+        
+        # Buy via conversion if we have a short position and it's profitable
+        if position < 0 and effective_buy_price < best_ask:
+            # Calculate profit including storage cost consideration
+            conversion_profit = (best_ask + storage_impact) - effective_buy_price
+            
+            if conversion_profit > 0:
+                max_buy_conversion = min(10, abs(position))
+                if max_buy_conversion > 0:
+                    conversion_amount = max_buy_conversion  # Positive for buying
+                    print(f"Converting to buy {max_buy_conversion} units at {effective_buy_price:.2f}")
+        
+        # Make sure we're not requesting both buy and sell conversions
+        # Conversion request should be:
+        # - Positive (1 to 10) to BUY when we have a SHORT position
+        # - Negative (-1 to -10) to SELL when we have a LONG position
+        # - Zero when no conversion is needed or when we have no position
+        
+        # Important: Only allow conversion in the valid direction for current position
+        if (position > 0 and conversion_amount > 0) or (position < 0 and conversion_amount < 0):
+            print(f"WARNING: Invalid conversion request {conversion_amount} for position {position}. Setting to 0.")
+            conversion_amount = 0
+        
+        # Ensure conversion is within limits
+        conversion_amount = max(-10, min(10, conversion_amount))
+        
+        # Update average entry price based on new orders
         if len(orders) > 0:
             total_cost = 0
             total_quantity = 0
@@ -486,111 +772,20 @@ class Trader:
                     total_quantity += order.quantity
             
             if total_quantity > 0:
-                if position == 0:
-                    self.history[product]["avg_entry_price"] = total_cost / total_quantity
+                current_position = position
+                current_avg_price = self.history[product]["positions"]["avg_entry_price"]
+                
+                # Update average entry price
+                if current_position <= 0:
+                    # New position, set avg price directly
+                    self.history[product]["positions"]["avg_entry_price"] = total_cost / total_quantity
                 else:
-                    # Weighted average with existing position
-                    self.history[product]["avg_entry_price"] = (
-                        (self.history[product]["avg_entry_price"] * position + total_cost) / 
-                        (position + total_quantity)
+                    # Update existing position with weighted average
+                    self.history[product]["positions"]["avg_entry_price"] = (
+                        (current_avg_price * current_position + total_cost) / 
+                        (current_position + total_quantity)
                     )
         
-        # Stop-loss percentage (exit if price falls 10% below max seen)
-        stop_loss_pct = 0.10
-        trailing_stop_price = self.history[product]["max_price_seen"] * (1 - stop_loss_pct)
-        
-        # Hard stop-loss (exit if losing more than 15% from entry)
-        hard_stop_loss_pct = 0.15
-        hard_stop_price = self.history[product]["avg_entry_price"] * (1 - hard_stop_loss_pct) if self.history[product]["avg_entry_price"] > 0 else 0
-        
-        # Log current status
-        print(f"Sunlight: {current_sunlight}, CSI: {csi_threshold}")
-        print(f"Position: {position}, Best Bid: {best_bid}, Best Ask: {best_ask}")
-        print(f"Current price: {current_mid_price}, Max seen: {self.history[product]['max_price_seen']}")
-        print(f"Avg entry: {self.history[product]['avg_entry_price']}, Trailing stop: {trailing_stop_price}, Hard stop: {hard_stop_price}")
-        
-        # Position limit
-        position_limit = 75
-        
-        # CSI-based trading logic
-        if current_sunlight < csi_threshold:
-            # Sunlight below CSI - go long aggressively
-            print("ALERT: Sunlight below CSI - implementing aggressive long strategy")
-            
-            # Base aggressiveness on how far below CSI the sunlight is
-            csi_diff = csi_threshold - current_sunlight
-            aggression_factor = min(1.0, csi_diff / 10)  # Scale aggressiveness, max at 10 points below CSI
-            
-            # Buy from market
-            if best_ask < float('inf'):
-                available_quantity = abs(order_depth.sell_orders.get(best_ask, 0))
-                # Scale desired position based on how far below CSI
-                target_position = int(position_limit * min(0.9, 0.5 + aggression_factor))
-                max_buy_market = min(available_quantity, target_position - position)
-                
-                if max_buy_market > 0:
-                    orders.append(Order(product, best_ask, max_buy_market))
-                    print(f"Buying {max_buy_market} units at {best_ask} - Sunlight below CSI")
-            
-            # Buy via conversion if market price is high and we don't already have a long position
-            if effective_buy_price < best_ask and position < position_limit:
-                # Can only convert to buy (positive conversion) if we have a short position
-                if position < 0:
-                    max_buy_conversion = min(10, abs(position))
-                    if max_buy_conversion > 0:
-                        conversion_amount = max_buy_conversion
-                        print(f"Converting to buy {max_buy_conversion} units - Sunlight below CSI")
-                    
-        else:
-            # Sunlight above CSI - normal market conditions
-            print("Sunlight above CSI - normal trading conditions")
-            
-            # If we have a position, consider taking profit or stopping loss
-            if position > 0:
-                # Take profit if market is significantly up
-                if self.history[product]["avg_entry_price"] > 0:
-                    profit_pct = (best_bid - self.history[product]["avg_entry_price"]) / self.history[product]["avg_entry_price"]
-                    
-                    # Take partial profits at different levels
-                    if profit_pct > 0.20:  # 20% profit - exit most of position
-                        sell_quantity = int(position * 0.8)
-                        if sell_quantity > 0 and best_bid > 0:
-                            orders.append(Order(product, best_bid, -sell_quantity))
-                            print(f"Taking profit: Selling {sell_quantity} units at {best_bid} ({profit_pct:.1%} profit)")
-                    
-                    elif profit_pct > 0.10:  # 10% profit - exit half of position
-                        sell_quantity = int(position * 0.5)
-                        if sell_quantity > 0 and best_bid > 0:
-                            orders.append(Order(product, best_bid, -sell_quantity))
-                            print(f"Taking profit: Selling {sell_quantity} units at {best_bid} ({profit_pct:.1%} profit)")
-                
-                # Check stop-loss conditions
-                if (current_mid_price < trailing_stop_price or current_mid_price < hard_stop_price) and best_bid > 0:
-                    # Trigger stop-loss - exit position
-                    print(f"STOP LOSS TRIGGERED: Current: {current_mid_price}, Trailing: {trailing_stop_price}, Hard: {hard_stop_price}")
-                    orders.append(Order(product, best_bid, -position))
-            
-            # Look for good conversion opportunities - can only convert to sell if we have a long position
-            if effective_sell_price > best_bid and position > 0:
-                max_sell_conversion = min(10, position)
-                if max_sell_conversion > 0:
-                    conversion_amount = -max_sell_conversion  # Negative for selling
-                    print(f"Converting to sell {max_sell_conversion} units at effective price {effective_sell_price}")
-        
-        # Make sure we're not requesting both buy and sell conversions
-        # Conversion request should be:
-        # - Positive (1 to 10) to BUY when we have a SHORT position
-        # - Negative (-1 to -10) to SELL when we have a LONG position
-        # - Zero when no conversion is needed or when we have no position
-        
-        # We shouldn't be adding to conversion_amount, just setting it once
-        conversion_amount = max(-10, min(10, conversion_amount))
-        
-        # Important: Only allow conversion in the valid direction for current position
-        if (position > 0 and conversion_amount > 0) or (position < 0 and conversion_amount < 0):
-            print(f"WARNING: Invalid conversion request {conversion_amount} for position {position}. Setting to 0.")
-            conversion_amount = 0
-
         return orders, conversion_amount
 
     def run(self, state: TradingState) -> Tuple[Dict[str, List[Order]], int, str]:
