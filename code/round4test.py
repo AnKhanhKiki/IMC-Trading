@@ -684,37 +684,6 @@ class Trader:
                         if effective_buy_price < fair_price + threshold:
                             conversion_amount = min(10, target_position - position)
                             print(f"No market depth. Converting to buy {conversion_amount} units at {effective_buy_price:.2f}")
-
-        
-        # CASE 2: Normal market conditions - use fair price model
-        else:
-            # Sell logic - market price above fair price estimate
-            if best_bid > 0 and price_difference > threshold:
-                # How much to sell depends on the magnitude of overvaluation
-                sell_aggression = min(1.0, price_difference / (2 * threshold))
-                target_sell = int((position_limit + position) * sell_aggression)
-                
-                # Get available quantity at best bid
-                available_quantity = order_depth.buy_orders.get(best_bid, 0)
-                sell_quantity = min(target_sell, available_quantity)
-                
-                if sell_quantity > 0:
-                    orders.append(Order(product, best_bid, -sell_quantity))
-                    print(f"Fair Price Strategy: Selling {sell_quantity} at {best_bid} (overvalued by {price_difference:.2f})")
-            
-            # Buy logic - market price below fair price estimate
-            if best_ask < float('inf') and price_difference < -threshold:
-                # How much to buy depends on the magnitude of undervaluation
-                buy_aggression = min(1.0, -price_difference / (2 * threshold))
-                target_buy = int((position_limit - position) * buy_aggression)
-                
-                # Get available quantity at best ask
-                available_quantity = abs(order_depth.sell_orders.get(best_ask, 0))
-                buy_quantity = min(target_buy, available_quantity)
-                
-                if buy_quantity > 0:
-                    orders.append(Order(product, best_ask, buy_quantity))
-                    print(f"Fair Price Strategy: Buying {buy_quantity} at {best_ask} (undervalued by {-price_difference:.2f})")
         
         # Check stop loss conditions if we have a long position
         if position > 0:
@@ -726,19 +695,10 @@ class Trader:
             
             # Check if stop is triggered and we're not in crisis mode (below CSI)
             # Track sunlight recovery time
-            if conversion_data.sunlightIndex > csi:
-                if "recovery_since" not in self.history[product]:
-                    self.history[product]["recovery_since"] = state.timestamp
-            else:
-                self.history[product].pop("recovery_since", None)
-
-            # Stop loss allowed only if sunlight has been above CSI for 10+ ticks
-            if position > 0 and "recovery_since" in self.history[product]:
-                if state.timestamp - self.history[product]["recovery_since"] > 10:
-                    if (actual_mid_price < trailing_stop or actual_mid_price < hard_stop):
-                        if best_bid > 0:
-                            print(f"STOP LOSS TRIGGERED: Price {actual_mid_price:.2f} below stop at {max(trailing_stop, hard_stop):.2f}")
-                            orders.append(Order(product, best_bid, -position))
+            if (actual_mid_price < trailing_stop or actual_mid_price < hard_stop) and not sunlight_below_csi:
+                if best_bid > 0:
+                    print(f"STOP LOSS TRIGGERED: Price {actual_mid_price:.2f} below stop at {max(trailing_stop, hard_stop):.2f}")
+                    orders.append(Order(product, best_bid, -position)) 
 
         
         # CONVERSION LOGIC
