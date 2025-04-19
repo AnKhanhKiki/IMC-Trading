@@ -500,7 +500,7 @@ class Trader:
             }
 
             # Clear observations to avoid overfitting
-            self.history[product]["observations"] = []
+            # self.history[product]["observations"] = []
             
             # Print results
             print(f"Updated Sunlight-Sugar Regression:")
@@ -551,6 +551,7 @@ class Trader:
         conversion_amount = 0
         product = "MAGNIFICENT_MACARONS"
         position = state.position.get(product, 0)
+        print(f"Current position in {product}: {position}")
 
         current_mid_price = (conversion_data.bidPrice + conversion_data.askPrice) / 2
 
@@ -592,9 +593,14 @@ class Trader:
         if len(self.history[product]["observations"]) > 1000:
             self.history[product]["observations"] = self.history[product]["observations"][-1000:]
         
-        # Update regression coefficients periodically
+        # Update regression coefficients periodically but when it reaches 1000, only update every 20 rounds
         if len(self.history[product]["observations"]) >= 50 and len(self.history[product]["observations"]) % 20 == 0:
-            self._update_sunlight_sugar_regression(product)
+            if len(self.history[product]["observations"]) == 1000:
+                if self.current_round % 20 == 0:
+                    # Update regression coefficients
+                    self._update_sunlight_sugar_regression(product)
+            else:
+                self._update_sunlight_sugar_regression(product)
         
         # Calculate effective prices for conversion
         effective_sell_price = conversion_data.bidPrice - conversion_data.transportFees - conversion_data.exportTariff
@@ -643,9 +649,9 @@ class Trader:
         
         # Log values for debugging
         print(f"Sugar: {conversion_data.sugarPrice}, Sunlight: {conversion_data.sunlightIndex}")
-        if "sunlight_sugar_regression" in self.history[product]:
-            reg = self.history[product]["sunlight_sugar_regression"]
-            print(f"Regression: {reg['sugar_coef']:.2f}*sugar + {reg['sunlight_coef']:.2f}*sunlight + {reg['intercept']:.2f}, R²: {reg['r_squared']:.4f}")
+        # if "sunlight_sugar_regression" in self.history[product]:
+        #     reg = self.history[product]["sunlight_sugar_regression"]
+            # print(f"Regression: {reg['sugar_coef']:.2f}*sugar + {reg['sunlight_coef']:.2f}*sunlight + {reg['intercept']:.2f}, R²: {reg['r_squared']:.4f}")
         print(f"Fair Price: {fair_price:.2f}, Actual Mid: {actual_mid_price:.2f}")
         print(f"Price difference: {price_difference:.2f}, Threshold: {threshold:.2f}")
         print(f"Current Volatility: {self.history[product]['price_volatility']:.2f}")
@@ -764,6 +770,7 @@ class Trader:
             # Calculate stop prices
             trailing_stop = pos_info["max_price_seen"] * (1 - pos_info["stop_loss_pct"])
             hard_stop = pos_info["avg_entry_price"] * (1 - pos_info["hard_stop_pct"]) if pos_info["avg_entry_price"] > 0 else 0
+            print(f"Trailing Stop: {trailing_stop:.2f}, Hard Stop: {hard_stop:.2f}")
             
             # Check if stop is triggered and we're not in crisis mode (below CSI)
             # Track sunlight recovery time
