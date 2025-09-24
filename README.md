@@ -1,4 +1,4 @@
-IMC TRADING PROSPERITY CHALLENGE
+Advanced Algorithmic Trading Strategies for a Simulated Market
 📜 Abstract
 This repository contains the source code for a high-frequency algorithmic trading bot designed for the Prosperity simulated market environment. The bot implements a portfolio of sophisticated, product-specific quantitative strategies to achieve its objective. The methodologies employed range from econometric analysis for price prediction and statistical arbitrage on co-integrated assets to the application of stochastic calculus for derivatives pricing. This document provides a detailed mathematical exposition of the models underpinning each trading strategy, their implementation, and the overarching risk management framework.
 
@@ -11,59 +11,60 @@ Each financial instrument is traded using a bespoke model tailored to its unique
 🥥 Rainforest Resin
 Model: Inventory-Adjusted VWAP Market Making
 
-Mathematical Formulation: This strategy is a simplified implementation of classic market-making models (e.g., Avellaneda-Stoikov). The core is to establish a fair value baseline and quote symmetrically around it, adjusting for inventory risk.
+Mathematical Formulation: This strategy is a simplified implementation of classic market-making models. The core is to establish a fair value baseline and quote symmetrically around it, adjusting for inventory risk.
+
+Fair Value Estimation: The fair value, P_fair, is estimated using the Volume-Weighted Average Price (VWAP) of the current order book:
+P_{\text{fair}}(t) = \text{VWAP} = \frac{\sum_{i \in \text{book}} P_i \cdot V_i}{\sum_{i \in \text{book}} V_i}
+where P_i and V_i are the price and volume of each order in the book.
+
+Optimal Quoting: The initial bid (P_bid) and ask (P_ask) prices are set as a fraction of the market spread (δ=P_best_ask−P_best_bid) around the fair value:
+P_{\text{bid}}(t) = P_{\text{fair}}(t) - \delta(t) \cdot r_{\text{spread}}
+P_{\text{ask}}(t) = P_{\text{fair}}(t) + \delta(t) \cdot r_{\text{spread}}
+where r_spread is a configurable ratio parameter.
+
+Inventory Risk Adjustment: To manage inventory risk, a linear penalty term is applied to the quotes. The adjustment skews the quotes to incentivize trades that reduce the current position (I_t). The final, adjusted quotes (P 
+′
+ ∗bid,P 
+′
+ ∗ask) are:
+P'_{\text{bid}}(t) = P_{\text{bid}}(t) - \lambda \cdot I_t
+P'_{\text{ask}}(t) = P_{\text{ask}}(t) - \lambda \cdot I_t
+where I_t is the inventory (position) at time t and λ is the inventory penalty coefficient.
+
+Of course. The errors you encountered are likely because GitHub's standard Markdown renderer requires a specific format for mathematical equations, rather than the standard LaTeX $ delimiters.
+
+Here is the corrected version of the detailed README. You can copy and paste this entire block directly into your GitHub README file, and the equations should render correctly.
+
+Advanced Algorithmic Trading Strategies for a Simulated Market
+📜 Abstract
+This repository contains the source code for a high-frequency algorithmic trading bot designed for the Prosperity simulated market environment. The bot implements a portfolio of sophisticated, product-specific quantitative strategies to achieve its objective. The methodologies employed range from econometric analysis for price prediction and statistical arbitrage on co-integrated assets to the application of stochastic calculus for derivatives pricing. This document provides a detailed mathematical exposition of the models underpinning each trading strategy, their implementation, and the overarching risk management framework.
+
+🧠 Core Mathematical Framework
+The bot operates on a discrete-time basis, receiving a TradingState snapshot at each time step t. The primary goal is to identify and exploit temporary market inefficiencies or predictive signals derived from market data and exogenous variables. The core logic is encapsulated within the Trader class, which manages state, configuration, and the execution of product-specific models.
+
+📈 Product-Specific Quantitative Strategies
+Each financial instrument is traded using a bespoke model tailored to its unique statistical properties and market microstructure.
+
+🥥 Rainforest Resin
+Model: Inventory-Adjusted VWAP Market Making
+
+Mathematical Formulation: This strategy is a simplified implementation of classic market-making models. The core is to establish a fair value baseline and quote symmetrically around it, adjusting for inventory risk.
 
 Fair Value Estimation: The fair value, P_fair, is estimated using the Volume-Weighted Average Price (VWAP) of the current order book:
 
-P 
-fair
-​
- (t)=VWAP= 
-∑ 
-i∈book
-​
- V 
-i
-​
- 
-∑ 
-i∈book
-​
- P 
-i
-​
- ⋅V 
-i
-​
- 
-​
- 
+Code snippet
 
+P_{\text{fair}}(t) = \text{VWAP} = \frac{\sum_{i \in \text{book}} P_i \cdot V_i}{\sum_{i \in \text{book}} V_i}
 where P_i and V_i are the price and volume of each order in the book.
 
 Optimal Quoting: The initial bid (P_bid) and ask (P_ask) prices are set as a fraction of the market spread (δ=P_best_ask−P_best_bid) around the fair value:
 
-P 
-bid
-​
- (t)=P 
-fair
-​
- (t)−δ(t)⋅r 
-spread
-​
- 
-P 
-ask
-​
- (t)=P 
-fair
-​
- (t)+δ(t)⋅r 
-spread
-​
- 
+Code snippet
 
+P_{\text{bid}}(t) = P_{\text{fair}}(t) - \delta(t) \cdot r_{\text{spread}}
+Code snippet
+
+P_{\text{ask}}(t) = P_{\text{fair}}(t) + \delta(t) \cdot r_{\text{spread}}
 where r_spread is a configurable ratio parameter.
 
 Inventory Risk Adjustment: To manage inventory risk, a linear penalty term is applied to the quotes. The adjustment skews the quotes to incentivize trades that reduce the current position (I_t). The final, adjusted quotes (P 
@@ -72,92 +73,126 @@ Inventory Risk Adjustment: To manage inventory risk, a linear penalty term is ap
 ′
  ∗ask) are:
 
-P 
-bid
-′
-​
- (t)=P 
-bid
-​
- (t)−λ⋅I 
-t
-​
- 
-P 
-ask
-′
-​
- (t)=P 
-ask
-​
- (t)−λ⋅I 
-t
-​
- 
+Code snippet
 
-where I_t is the inventory (position) at time t and λ is the inventory penalty coefficient. A positive I_t (long position) lowers both bid and ask prices, making it more likely to sell and less likely to buy.
+P'_{\text{bid}}(t) = P_{\text{bid}}(t) - \lambda \cdot I_t
+Code snippet
+
+P'_{\text{ask}}(t) = P_{\text{ask}}(t) - \lambda \cdot I_t
+where I_t is the inventory (position) at time t and λ is the inventory penalty coefficient.
 
 🌱 Kelp & 🦑 Squid Ink
 Model: Stochastic Mean Reversion
 
-Mathematical Formulation: These strategies model the mid-price process, P_t, as a discrete-time Ornstein-Uhlenbeck process, which tends to revert to a moving average, μ_t.
+Mathematical Formulation: These strategies model the mid-price process, P_t, as a discrete-time process that tends to revert to a moving average, μ_t.
 
-Moving Average Estimation (μ_t): The long-term mean μ_t is estimated using either a Simple Moving Average (SMA) for Squid Ink or an Exponential Moving Average (EMA) for Kelp.
+Moving Average Estimation (μ_t): The long-term mean μ_t is estimated using either a Simple Moving Average (SMA) or an Exponential Moving Average (EMA).
 
-SMA: μ_t=SMA∗N(t)= 
-N
-1
-​
- ∑∗i=0 
-N−1
- P_t−i
+SMA:
+\mu_t = \text{SMA}_N(t) = \frac{1}{N} \sum_{i=0}^{N-1} P_{t-i}
+EMA:
+\mu_t = \text{EMA}_N(t) = \alpha \cdot P_t + (1 - \alpha) \cdot \text{EMA}_N(t-1)
+where \alpha = 2 / (N+1).
+Trading Signal: A trading signal is generated when the normalized deviation of the current price from the estimated mean exceeds a predefined threshold, θ.
+\text{Signal} = \frac{P_t - \mu_t}{\mu_t}
+If Signal > θ, the asset is considered overvalued (sell). If Signal < −θ, it's considered undervalued (buy).
 
-EMA: $ \mu_t = \text{EMA}_N(t) = \alpha \cdot P_t + (1 - \alpha) \cdot \text{EMA}_N(t-1) $, where α= 
-N+1
-2
-​
- .
+Of course. The errors you encountered are likely because GitHub's standard Markdown renderer requires a specific format for mathematical equations, rather than the standard LaTeX $ delimiters.
+
+Here is the corrected version of the detailed README. You can copy and paste this entire block directly into your GitHub README file, and the equations should render correctly.
+
+Advanced Algorithmic Trading Strategies for a Simulated Market
+📜 Abstract
+This repository contains the source code for a high-frequency algorithmic trading bot designed for the Prosperity simulated market environment. The bot implements a portfolio of sophisticated, product-specific quantitative strategies to achieve its objective. The methodologies employed range from econometric analysis for price prediction and statistical arbitrage on co-integrated assets to the application of stochastic calculus for derivatives pricing. This document provides a detailed mathematical exposition of the models underpinning each trading strategy, their implementation, and the overarching risk management framework.
+
+🧠 Core Mathematical Framework
+The bot operates on a discrete-time basis, receiving a TradingState snapshot at each time step t. The primary goal is to identify and exploit temporary market inefficiencies or predictive signals derived from market data and exogenous variables. The core logic is encapsulated within the Trader class, which manages state, configuration, and the execution of product-specific models.
+
+📈 Product-Specific Quantitative Strategies
+Each financial instrument is traded using a bespoke model tailored to its unique statistical properties and market microstructure.
+
+🥥 Rainforest Resin
+Model: Inventory-Adjusted VWAP Market Making
+
+Mathematical Formulation: This strategy is a simplified implementation of classic market-making models. The core is to establish a fair value baseline and quote symmetrically around it, adjusting for inventory risk.
+
+Fair Value Estimation: The fair value, P_fair, is estimated using the Volume-Weighted Average Price (VWAP) of the current order book:
+
+Code snippet
+
+P_{\text{fair}}(t) = \text{VWAP} = \frac{\sum_{i \in \text{book}} P_i \cdot V_i}{\sum_{i \in \text{book}} V_i}
+where P_i and V_i are the price and volume of each order in the book.
+
+Optimal Quoting: The initial bid (P_bid) and ask (P_ask) prices are set as a fraction of the market spread (δ=P_best_ask−P_best_bid) around the fair value:
+
+Code snippet
+
+P_{\text{bid}}(t) = P_{\text{fair}}(t) - \delta(t) \cdot r_{\text{spread}}
+Code snippet
+
+P_{\text{ask}}(t) = P_{\text{fair}}(t) + \delta(t) \cdot r_{\text{spread}}
+where r_spread is a configurable ratio parameter.
+
+Inventory Risk Adjustment: To manage inventory risk, a linear penalty term is applied to the quotes. The adjustment skews the quotes to incentivize trades that reduce the current position (I_t). The final, adjusted quotes (P 
+′
+ ∗bid,P 
+′
+ ∗ask) are:
+
+Code snippet
+
+P'_{\text{bid}}(t) = P_{\text{bid}}(t) - \lambda \cdot I_t
+Code snippet
+
+P'_{\text{ask}}(t) = P_{\text{ask}}(t) - \lambda \cdot I_t
+where I_t is the inventory (position) at time t and λ is the inventory penalty coefficient.
+
+🌱 Kelp & 🦑 Squid Ink
+Model: Stochastic Mean Reversion
+
+Mathematical Formulation: These strategies model the mid-price process, P_t, as a discrete-time process that tends to revert to a moving average, μ_t.
+
+Moving Average Estimation (μ_t): The long-term mean μ_t is estimated using either a Simple Moving Average (SMA) or an Exponential Moving Average (EMA).
+
+SMA:
+
+Code snippet
+
+\mu_t = \text{SMA}_N(t) = \frac{1}{N} \sum_{i=0}^{N-1} P_{t-i}
+EMA:
+
+Code snippet
+
+\mu_t = \text{EMA}_N(t) = \alpha \cdot P_t + (1 - \alpha) \cdot \text{EMA}_N(t-1)
+where \alpha = 2 / (N+1).
 
 Trading Signal: A trading signal is generated when the normalized deviation of the current price from the estimated mean exceeds a predefined threshold, θ.
 
-Signal= 
-μ 
-t
-​
- 
-P 
-t
-​
- −μ 
-t
-​
- 
-​
- 
-If Signal > θ, the asset is considered overvalued, and a short position is initiated.
+Code snippet
 
-If Signal < −θ, the asset is considered undervalued, and a long position is initiated.
+\text{Signal} = \frac{P_t - \mu_t}{\mu_t}
+If Signal > θ, the asset is considered overvalued (sell). If Signal < −θ, it's considered undervalued (buy).
 
-🧺 Picnic Baskets (PICNIC_BASKET1 & PICNIC_BASKET2)
+🧺 Picnic Baskets
 Model: Statistical Arbitrage on a Synthetic ETF
 
-Mathematical Formulation: The strategy assumes that the basket price, P_B,t, is a linear combination of its component prices, forming a co-integrated relationship. The spread between the basket's market price and its theoretical value is modeled as a mean-reverting process.
+Mathematical Formulation: The strategy assumes the basket price is a linear combination of its component prices. The spread between the basket's market price and its theoretical value is modeled as a mean-reverting process.
 
-Theoretical Basket Value: The theoretical bid and ask values of the basket are calculated from the component markets. Let the basket be composed of k components with quantities q_1,q_2,...,q_k.
+Theoretical Basket Value: The theoretical bid and ask values of the basket are calculated from the component markets. Let the basket be composed of k components with quantities q_1,...,q_k.
 
-Cost to Create (Composite Ask): P_comp_ask(t)=∑_i=1 
-k
- q_i⋅P_C_i,ask(t)
+Cost to Create (Composite Ask):
 
-Value to Dismantle (Composite Bid): P_comp_bid(t)=∑_i=1 
-k
- q_i⋅P_C_i,bid(t)
+P_{\text{comp\_ask}}(t) = \sum_{i=1}^{k} q_i \cdot P_{C_i, \text{ask}}(t)
 
-Arbitrage Conditions: An arbitrage opportunity exists if the cost of a round-trip transaction is negative (i.e., yields a profit).
+Value to Dismantle (Composite Bid):
 
-Buy Arbitrage (Buy Basket, Sell Components): Execute if $P\_{B, \text{ask}}(t) \< P\_{\text{comp\_bid}}(t)$. The theoretical profit per basket is P_comp_bid(t)−P_B,ask(t).
+P_{\text{comp\_bid}}(t) = \sum_{i=1}^{k} q_i \cdot P_{C_i, \text{bid}}(t)
 
-Sell Arbitrage (Sell Basket, Buy Components): Execute if P_B,bid(t)P_comp_ask(t). The theoretical profit per basket is P_B,bid(t)−P_comp_ask(t).
+Arbitrage Conditions:
+
+Buy Arbitrage (Buy Basket, Sell Components): Execute if $P\_{B, \text{ask}}(t) \< P\_{\text{comp\_bid}}(t)$.
+
+Sell Arbitrage (Sell Basket, Buy Components): Execute if P_B,bid(t)P_comp_ask(t).
 
 🌋 Volcanic Rock Vouchers
 Model: Black-Scholes-Merton Option Pricing
@@ -166,272 +201,75 @@ Mathematical Formulation: The voucher is treated as a European call option. Its 
 
 Volatility Estimation (σ): The volatility of the underlying asset (VOLCANIC_ROCK) is estimated from the standard deviation of historical logarithmic returns.
 
-r 
-t
-​
- =ln( 
-S 
-t−1
-​
- 
-S 
-t
-​
- 
-​
- )
-σ 
-daily
-​
- =StDev(r 
-t
-​
- ,r 
-t−1
-​
- ,…,r 
-t−N
-​
- )
-σ 
-annual
-​
- =σ 
-daily
-​
- ⋅ 
-365
+r_t = \ln\left(\frac{S_t}{S_{t-1}}\right)
+\sigma_{\text{annual}} = \text{StDev}(r_{t}, \ldots, r_{t-N}) \cdot \sqrt{365}
 
-​
- 
 BSM Formula: The fair value of the call option is:
-
-C(S 
-t
-​
- ,t)=S 
-t
-​
- Φ(d 
-1
-​
- )−Ke 
-−r(T−t)
- Φ(d 
-2
-​
- )
-
+C(S_t, t) = S_t \Phi(d_1) - K e^{-r(T-t)} \Phi(d_2)
 where:
-
-d 
-1
-​
- = 
-σ 
-T−t
-
-​
- 
-ln(S 
-t
-​
- /K)+(r+ 
-2
-σ 
-2
- 
-​
- )(T−t)
-​
- 
-d 
-2
-​
- =d 
-1
-​
- −σ 
-T−t
-
-​
- 
-S_t: Current price of the underlying asset (VOLCANIC_ROCK).
+d_1 = \frac{\ln(S_t/K) + (r + \frac{\sigma^2}{2})(T-t)}{\sigma\sqrt{T-t}}
+d_2 = d_1 - \sigma\sqrt{T-t}
+S_t: Current price of the underlying asset.
 
 K: Strike price of the voucher.
 
 T−t: Time to expiration in years.
 
-σ: Annualized volatility of the underlying.
+σ: Annualized volatility.
 
-r: Risk-free interest rate (assumed 0).
-
-Φ(⋅): The cumulative distribution function (CDF) of the standard normal distribution. The code uses a high-precision polynomial approximation for this function.
-
-Trading Logic: The bot compares the calculated fair value C(S_t,t) to the voucher's market mid-price. If the discrepancy exceeds a dynamic buffer, it places orders to capitalize on the perceived mispricing.
+Φ(⋅): The CDF of the standard normal distribution.
 
 🍰 Magnificent Macarons
 Model: Multivariate Regression with a Non-Linear Event Trigger
 
-Mathematical Formulation: This strategy uses an econometric model to predict the fair price based on exogenous factors, but switches to a behavioral, event-driven model under specific conditions.
+Mathematical Formulation: This strategy uses an econometric model to predict the fair price, but switches to a behavioral, event-driven model under specific conditions.
 
 Fair Value Econometric Model: The fair price  
 P
 ^
- ∗t is estimated using Ordinary Least Squares (OLS) regression. The model is:
+ _t is estimated using Ordinary Least Squares (OLS) regression.
+P_t = \beta_0 + \beta_1 X_{1,t} + \beta_2 X_{2,t} + \epsilon_t
 
-P 
-t
-​
- =β 
-0
-​
- +β 
-1
-​
- X 
-1,t
-​
- +β 
-2
-​
- X 
-2,t
-​
- +ϵ 
-t
-​
- 
-
-where X∗1,t is sugarPrice and X_2,t is sunlightIndex. In matrix form, for a set of n observations, Y=Xβ+ϵ. The vector of estimated coefficients  
+where X_1,t is sugarPrice and X_2,t is sunlightIndex. The vector of estimated coefficients  
 β
 ^
 ​
   is found via the normal equation:
 
-β
-^
-​
- =(X 
-T
- X) 
-−1
- X 
-T
- Y
-
+\hat{\beta} = (X^T X)^{-1} X^T Y
 The model's fit is evaluated using the coefficient of determination, R 
 2
  :
+R^2 = 1 - \frac{\sum_{i=1}^{n}(y_i - \hat{y}_i)^2}{\sum_{i=1}^{n}(y_i - \bar{y})^2}
 
-R 
-2
- =1− 
-∑ 
-i=1
-n
-​
- (y 
-i
-​
- − 
-y
-ˉ
-​
- ) 
-2
- 
-∑ 
-i=1
-n
-​
- (y 
-i
-​
- − 
-y
-^
-​
-  
-i
-​
- ) 
-2
- 
-​
- 
-Event-Driven Adjustment (CSI): The model incorporates a non-linear adjustment based on the Critical Sunlight Index (CSI). This captures the market's panic-buying behavior during a perceived supply shock. The adjusted fair price,  
+Event-Driven Adjustment (CSI): The model incorporates a non-linear adjustment based on the Critical Sunlight Index (CSI). The adjusted fair price,  
 P
 ^
   
 ′
  _t, is:
+ \hat{P}'_t = 
+\begin{cases} 
+\hat{P}_t + (\text{CSI} - X_{2,t}) \cdot |\hat{\beta}_2| \cdot k & \text{if } X_{2,t} < \text{CSI} \\ 
+\hat{P}_t & \text{otherwise} 
+\end{cases}
 
-P
-^
-  
-t
-′
-​
- ={ 
-P
-^
-  
-t
-​
- +(CSI−X 
-2,t
-​
- )⋅∣ 
-β
-^
-​
-  
-2
-​
- ∣⋅k
-P
-^
-  
-t
-​
- 
-​
-  
-if X 
-2,t
-​
- <CSI
-otherwise
-​
- 
-
-where k is a multiplier (k=2.5) that amplifies the price impact when sunlight is critically low. This transforms the linear model into a piecewise function, aggressively increasing the price target during a supply shock event.
-
-Execution:
-
-Below CSI: An aggressive long-only strategy is deployed to build a position up to a target size, anticipating a price spike.
-
-Above CSI: The bot trades based on deviations from the regression-predicted fair price  
-P
-^
- _t. It also deploys a mean-reversion strategy to short the asset if it becomes significantly overvalued after a CSI event, fading the panic.
+where k is an amplifier multiplier (k=2.5).
 
 ⚙️ Risk Management Framework
-Position Limits: A hard constraint is applied to the inventory I_t for each product:
+Position Limits: A hard constraint is applied to the inventory I_t for each product j:
 
-∣I 
-t,j
-​
- ∣≤I 
-max,j
-​
- ∀j∈{products}
-Stop-Loss Orders: For the high-risk Macarons strategy, a path-dependent exit rule is implemented. A position is liquidated if the current price P_t breaches a threshold determined by the historical path of prices since the position was opened.
+|I_{t,j}| \le I_{\text{max},j}
 
-Trailing Stop: $P\_t \< \left(\max\_{i \in [t\_0, t]} P\_i\right) \cdot (1 - \text{SL}\_{%})$
+Stop-Loss Orders: For the high-risk Macarons strategy, a path-dependent exit rule is implemented.
 
-Hard Stop: $P\_t \< P\_{\text{entry}} \cdot (1 - \text{SL}\_{\text{hard}%})$
+Trailing Stop:
+
+P_t < \left(\max_{i \in [t_0, t]} P_i\right) \cdot (1 - \text{SL}_{\%})
+
+Hard Stop:
+P_t < P_{\text{entry}} \cdot (1 - \text{SL}_{\text{hard}\%})
+
 where t_0 is the time of entry.
 
 💻 Code Architecture
@@ -441,11 +279,8 @@ __init__(self): Initializes strategy_config (hyperparameters) and history (state
 
 run(self, state: TradingState): The main event loop that ingests market data, invokes the relevant quantitative models, and dispatches orders.
 
-Strategy Functions: Private methods within Trader that contain the implementation of the mathematical models described above (e.g., _volcanic_voucher_strategy, _macarons_strategy).
+Strategy Functions: Private methods within Trader that contain the implementation of the mathematical models described above.
 
 🛠️ Dependencies
 The project requires the following standard Python libraries for numerical computing:
-
-Bash
-
 pip install numpy pandas jsonpickle
